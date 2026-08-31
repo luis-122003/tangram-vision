@@ -1,0 +1,481 @@
+================================================================================
+INSTRUCTIVO DE LEVANTAMIENTO DEL BACKEND - TANGRAM IA
+================================================================================
+Proyecto : Sistema inteligente de validacion de configuraciones Tangram
+Backend  : Node.js + Express + MySQL   (carpeta tangram-ia/backend)
+Vision   : Python + YOLOv8s-seg + validador geometrico
+                                       (carpeta tangram-ia/vision-service)
+================================================================================
+
+SON DOS PROCESOS, NO UNO
+------------------------
+El backend se dividio en dos servicios. El de Node atiende a la web y al
+celular: autentica, sirve el catalogo de figuras, guarda los intentos y calcula
+el progreso. El de Python solo analiza las fotos: detector y validador
+geometrico.
+
+El servicio de vision NO habla con MySQL. Node lee la figura objetivo de la base
+de datos y le manda la silueta junto con la foto, asi que las credenciales de
+MySQL estan en un solo sitio.
+
+    Celular ─┐
+             ├─► backend (Node, 8000) ──► MySQL
+    Web ─────┘        │
+                      └──► vision-service (Python, 8001) ──► YOLO + validador
+
+El orden de arranque importa: primero el de vision (cargar el detector tarda
+unos segundos), luego el de Node.
+
+ATAJO: desde tangram-ia\, el script  .\dev.ps1  levanta los tres procesos
+(vision, backend y frontend) en ventanas separadas y comprueba que respondan.
+El resto de este instructivo explica como hacerlo a mano y que revisar cuando
+algo falla.
+
+
+--------------------------------------------------------------------------------
+0. REQUISITOS PREVIOS
+--------------------------------------------------------------------------------
+  - Node.js 18 o superior (probado con Node 22).
+  - Python 3.10 o superior (probado con Python 3.11).
+  - MySQL Server corriendo. La aplicacion crea la base de datos, las tablas y
+    siembra los datos por su cuenta; NO hay que crear nada a mano.
+  - Aproximadamente 1.5 GB libres en disco (Ultralytics/PyTorch pesan).
+  - Para usar la app del celular: PC y celular en la MISMA red Wi-Fi.
+
+
+--------------------------------------------------------------------------------
+1. EL MODELO
+--------------------------------------------------------------------------------
+El servicio de vision usa UN SOLO modelo:
+
+    vision-service\models\tangram_piezas_seg_best.pt  (23 MB)
+
+Detecta y segmenta las 7 fichas del Tangram. Ya esta en la carpeta y no hay que
+armarlo por partes.
+
+  CUIDADO CON EL NOMBRE: la variable YOLO_WEIGHTS del .env tiene que apuntar
+  exactamente a ese archivo. Si apunta a un nombre que no existe (por ejemplo
+  el antiguo "tangram_yolo.pt"), el servicio ARRANCA IGUAL pero responde en
+  modo demostracion ("mock": true) con valores simulados: la validacion NO es
+  real y es facil no darse cuenta. Se comprueba en /health, campo yolo_loaded.
+
+  El resto de la validacion —contar las 7 fichas, ver si hay fichas montadas,
+  buscar huecos dentro de la figura, detectar fichas sueltas y comparar la
+  silueta con la figura objetivo— la hace tangram_validator.py por geometria,
+  sin pesos ni entrenamiento.
+
+  El U-Net/ResNet34 que antes se unia en 3 pedazos YA NO SE USA. El archivo
+  unet_tangram_model_resnet34.keras se puede borrar sin afectar a nada. Ver
+  vision-service\models\README.txt.
+
+  Para comprobar el validador sin arrancar nada (30 pruebas internas, tarda
+  unos segundos):
+
+     cd tangram-ia\vision-service
+     .\venv\Scripts\python.exe tangram_validator.py --autotest
+
+  Debe terminar con "RESULTADO: todas las pruebas pasaron."
+
+
+--------------------------------------------------------------------------------
+2. INSTALACION (SOLO LA PRIMERA VEZ)
+--------------------------------------------------------------------------------
+  2.1 SERVICIO DE VISION (Python)
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\vision-service
+     python -m venv venv
+     .\venv\Scripts\Activate.ps1
+     pip install -r requirements.txt
+
+  Si PowerShell bloquea la activacion del entorno (mensaje "la ejecucion de
+  scripts esta deshabilitada"), ejecuta una sola vez:
+
+     Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+  NOTA SOBRE VERSIONES: los pesos se entrenaron con ultralytics 8.4.79.
+  Instalar versiones anteriores hace que el modelo NO cargue. Por eso
+  requirements.txt la exige como minimo; no la bajes de version.
+
+  Si la carpeta vision-service\venv ya existe, este paso YA ESTA HECHO.
+
+  2.2 BACKEND (Node)
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\backend
+     npm install
+
+  2.3 FRONTEND (solo si vas a usar la web)
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\frontend
+     npm install
+
+
+--------------------------------------------------------------------------------
+3. CONFIGURAR LOS ARCHIVOS .env
+--------------------------------------------------------------------------------
+Ahora hay DOS: uno por servicio. Si no existen, copialos de los ejemplos con
+   copy .env.example .env
+
+  3.1 backend\.env  — base de datos, sesiones y direccion del servicio de vision
+
+     PORT=8000
+
+     DB_HOST=127.0.0.1
+     DB_PORT=3307
+     DB_USER=tangram_app
+     DB_PASSWORD=<la que pusiste al crear el usuario, ver 3.3>
+     DB_NAME=tangram_ia
+
+     NOTA: ni la contrasena de la base ni el secreto de los tokens se escriben
+     en este instructivo ni en ningun archivo que se versione. Van SOLO en
+     backend\.env, que esta en .gitignore. Si alguna vez una de las dos aparece
+     en un documento, un chat o una captura, hay que darla por comprometida y
+     cambiarla (ver 3.4).
+
+     # Secreto con el que se firman los tokens de sesion. SIN ESTO EL SERVIDOR
+     # NO ARRANCA, y es deliberado: un secreto por defecto compartido
+     # equivaldria a no tener autenticacion. Genera el tuyo con:
+     #   node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+     JWT_SECRET=...
+     JWT_EXPIRES_IN=12h
+
+     VISION_URL=http://127.0.0.1:8001
+     VISION_TIMEOUT_MS=40000
+     MAX_IMAGE_MB=25
+
+  ATENCION AL PUERTO DE MySQL: en esta instalacion MySQL NO esta en el 3306 por
+  defecto, sino en el 3307. Si cambias de equipo, verifica el puerto real.
+
+  Para comprobar que MySQL responde en el puerto configurado:
+
+     Test-NetConnection -ComputerName 127.0.0.1 -Port 3307 -InformationLevel Quiet
+
+  Debe imprimir "True". Si imprime "False", el servicio de MySQL esta apagado
+  o escucha en otro puerto.
+
+  Si cambias JWT_SECRET, todas las sesiones abiertas dejan de valer: la web y la
+  app piden entrar de nuevo. Es lo esperado, no un error.
+
+  3.2 vision-service\.env  — detector y umbrales del validador
+
+     YOLO_WEIGHTS=models/tangram_piezas_seg_best.pt
+     YOLO_CONF=0.35
+     # Resolucion a la que el detector reescala la foto (640 de fabrica pierde
+     # las fichas cuando la figura se fotografia de lejos)
+     YOLO_IMGSZ=960
+
+     # Acierto minimo para dar la figura por correcta (0..1)
+     MATCH_IOU=0.75
+     # A partir de aqui se le dice al estudiante "vas bien, ajusta"
+     CLOSE_IOU=0.70
+     # Si es 0, faltar o sobrar fichas se informa pero no invalida la figura
+     REQUIRE_INVENTORY=0
+
+  Los umbrales viven aqui y no en el backend Node: tangram_validator los guarda
+  en variables de modulo, asi que fijarlos por peticion haria que dos fotos
+  analizadas a la vez se pisaran los umbrales.
+
+  3.3 CREAR EL USUARIO DE MySQL (una sola vez, RECOMENDADO)
+
+  Conectar como root deja al backend con permiso para borrar cualquier base del
+  servidor. El usuario 'tangram_app' solo puede tocar 'tangram_ia':
+
+     mysql -u root -p --port=3307 < backend\sql\crear-usuario.sql
+
+  Antes de ejecutarlo, abre ese archivo y cambia PON_AQUI_UNA_CLAVE_LARGA por
+  una contrasena generada al azar:
+
+     node -e "console.log(require('crypto').randomBytes(18).toString('hex'))"
+
+  Esa misma clave va en DB_PASSWORD de backend\.env, con DB_USER=tangram_app.
+  Mientras sigas usando root, el backend te lo recuerda al arrancar.
+
+  3.4 SI UN SECRETO SE FILTRA
+
+  Si la contrasena de la base o alguno de los secretos aparece en un documento,
+  un chat, una captura o un repositorio, hay que cambiarlo:
+
+     cd backend
+     npm run rotar-secretos          (JWT_SECRET y REFRESH_SECRET)
+
+  Efecto: todas las sesiones abiertas se cierran y hay que volver a entrar. Es
+  inofensivo.
+
+  NO uses `npm run rotar-secretos -- --todo` sin pensarlo: eso cambia tambien
+  las claves de cifrado (ENCRYPTION_KEY, BLIND_INDEX_KEY) y los datos ya
+  cifrados en la base dejan de poder leerse. Solo tiene sentido sobre una base
+  vacia.
+
+  Para la contrasena de MySQL, cambiala en el servidor y actualiza el .env:
+
+     ALTER USER 'tangram_app'@'localhost' IDENTIFIED BY 'la-nueva';
+
+  3.5 COMPROBAR QUE LA SEGURIDAD SIGUE EN PIE
+
+  Con el backend corriendo:
+
+     cd backend
+     npm run probar-seguridad
+
+  Ejecuta 40 comprobaciones sobre el servidor vivo: cifrado de los datos,
+  control de acceso, bloqueo por fuerza bruta, validacion de las fotos,
+  cabeceras y revocacion de sesiones. Deben pasar las 40.
+
+  OJO: la bateria provoca fallos de login a proposito, asi que lanzarla dos
+  veces seguidas agota el limite por IP y casi todo empieza a fallar. Reinicia
+  el backend (Ctrl+C y `npm run dev`) antes de cada pasada. Si se te olvida, el
+  script lo detecta y te lo dice en vez de dar fallos confusos.
+
+  El detalle de que protege cada cosa esta en SEGURIDAD.md, en la raiz.
+
+
+--------------------------------------------------------------------------------
+4. ARRANCAR
+--------------------------------------------------------------------------------
+Dos ventanas de PowerShell, en este orden.
+
+  VENTANA 1 - SERVICIO DE VISION (siempre en local; solo lo llama el backend)
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\vision-service
+     .\venv\Scripts\python.exe -m uvicorn service:app --port 8001
+
+  VENTANA 2 - BACKEND
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\backend
+     npm run dev
+
+  A diferencia de uvicorn, Express escucha en TODAS las interfaces por defecto,
+  asi que no hace falta ningun equivalente a --host 0.0.0.0: el celular ya puede
+  llegar por la IP de la PC. `npm run dev` reinicia solo con cada cambio de
+  codigo; para dejarlo fijo, `npm run build` y luego `npm start`.
+
+  VENTANA 3 - FRONTEND (opcional, solo para la web)
+
+     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\frontend
+     npm run dev                       ->  http://localhost:5173
+
+
+--------------------------------------------------------------------------------
+5. ¿ARRANCO BIEN? QUE DEBE APARECER
+--------------------------------------------------------------------------------
+En la ventana del SERVICIO DE VISION:
+
+     [OK] YOLOv8s-seg cargado · clases: ['large_tri_orange', 'large_tri_green', ...]
+     [OK] Validador geometrico listo · acierto >= 75% · inventario informativo
+     INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+
+En la ventana del BACKEND:
+
+     [OK] MySQL conectado (127.0.0.1:3307/tangram_ia)
+     [OK] API escuchando en http://localhost:8000
+     [OK] Servicio de vision en http://127.0.0.1:8001
+
+Verificacion definitiva (en otra ventana de PowerShell):
+
+     Invoke-RestMethod -Uri 'http://localhost:8000/health' | ConvertTo-Json
+
+Respuesta esperada; los valores deben salir asi:
+
+     {
+       "status": "ok",
+       "yolo_loaded": true,
+       "validator_ready": true,
+       "db_connected": true,
+       "match_threshold": 0.75,
+       "vision_connected": true
+     }
+
+  - yolo_loaded en false      -> revisa el paso 1: YOLO_WEIGHTS apunta a un
+                                 archivo que no existe. La validacion seria
+                                 simulada.
+  - vision_connected en false -> el servicio de Python no esta arrancado, o
+                                 VISION_URL apunta a otro puerto.
+  - db_connected en false     -> revisa el paso 3.1 (MySQL y .env).
+  - validator_ready en false  -> viene del servicio de vision; si tambien
+                                 vision_connected es false, es lo mismo.
+
+Y que el catalogo quedo sembrado. Ojo: /figures ahora exige haber iniciado
+sesion, asi que primero se pide un token:
+
+     $t = (Invoke-RestMethod -Uri 'http://localhost:8000/token' -Method POST `
+             -Body 'username=docente%40tangram.edu&password=1234' `
+             -ContentType 'application/x-www-form-urlencoded').access_token
+     (Invoke-RestMethod -Uri 'http://localhost:8000/figures' `
+             -Headers @{ Authorization = "Bearer $t" }).Count
+
+Deben ser 8 figuras activas: Casa, Flecha, Pez, Triangulo, Gato, Interrogacion,
+Pajaro y Persona.
+
+
+--------------------------------------------------------------------------------
+6. CONECTAR LA APP DEL CELULAR
+--------------------------------------------------------------------------------
+  6.1 Averigua la IP de la PC en el Wi-Fi:
+
+      Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+        $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*'
+      } | Select-Object IPAddress, InterfaceAlias
+
+      En este equipo la IP es 192.168.1.10 (interfaz Wi-Fi), asi que la URL del
+      backend para el celular es:
+
+                        http://192.168.1.10:8000
+
+      OJO: esa IP la asigna el router por DHCP y PUEDE CAMBIAR si el router o
+      la PC se reinician. Si la app deja de conectar, lo primero es volver a
+      ejecutar este comando y comparar la IP.
+
+      El celular apunta SIEMPRE al 8000 (el backend). El 8001 es interno: no
+      hay que abrirlo ni configurarlo en la app.
+
+  6.2 Conecta el celular a la MISMA red Wi-Fi que la PC.
+
+  6.3 Prueba desde el navegador DEL CELULAR:
+
+                  http://192.168.1.10:8000/health
+
+      /health sigue siendo publico justamente para esto: sirve para comprobar
+      la direccion antes de iniciar sesion. Si aparece el JSON con
+      "status":"ok", la red esta bien y la app va a conectar. Si no carga, el
+      problema es de red o de firewall (punto 7), no de la app.
+
+  6.4 La URL que trae compilada la app esta en mobile\app.json, en la clave
+      extra.apiUrl. Ademas la app tiene una pantalla de AJUSTES donde se puede
+      cambiar la URL del backend sin recompilar: queda guardada en el telefono.
+      Es la via rapida cuando cambia la IP.
+
+  6.5 Usuarios de prueba ya sembrados en la base de datos:
+
+      Estudiante : estudiante@tangram.edu   /   1234
+      Docente    : docente@tangram.edu      /   1234
+
+      La sesion queda guardada en el telefono y dura 12 horas, asi que el niño
+      no tiene que teclear su clave cada vez que abre la app.
+
+
+--------------------------------------------------------------------------------
+7. FIREWALL DE WINDOWS
+--------------------------------------------------------------------------------
+Si el celular no logra abrir http://IP:8000/health, casi siempre es el Firewall
+de Windows bloqueando las conexiones entrantes.
+
+  IMPORTANTE: antes el que escuchaba era python.exe y ahora es node.exe, asi
+  que las reglas que ya existieran para Python NO sirven para el backend.
+  La primera vez que arranques `npm run dev`, Windows suele preguntar si
+  permites el acceso: hay que aceptar (marcando redes privadas, y publicas si
+  la Wi-Fi esta catalogada asi).
+
+  Ver el perfil de la red actual (Public o Private):
+
+     Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory
+
+  Si hiciera falta abrir el puerto a mano, ejecuta PowerShell COMO
+  ADMINISTRADOR:
+
+     New-NetFirewallRule -DisplayName "Tangram IA backend 8000" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private,Public
+
+  Recomendacion de seguridad: esa regla expone el puerto 8000 a toda la red
+  local. Usala en redes de confianza y eliminala cuando ya no la necesites:
+
+     Remove-NetFirewallRule -DisplayName "Tangram IA backend 8000"
+
+  El puerto 8001 (vision) NO debe abrirse: ese servicio no autentica a nadie y
+  solo tiene que ser alcanzable desde la propia PC.
+
+
+--------------------------------------------------------------------------------
+8. DETENER LOS SERVICIOS
+--------------------------------------------------------------------------------
+  En cada ventana donde corren:  Ctrl + C
+
+  Si quedo un proceso colgado ocupando un puerto (cambia 8000 por 8001 o 5173
+  segun el caso):
+
+     Get-NetTCPConnection -LocalPort 8000 -State Listen |
+       Select-Object -ExpandProperty OwningProcess |
+       ForEach-Object { Stop-Process -Id $_ -Force }
+
+
+--------------------------------------------------------------------------------
+9. ENDPOINTS DISPONIBLES
+--------------------------------------------------------------------------------
+Todas las rutas exigen token salvo /token y /health. El token se obtiene en
+/token y viaja como cabecera:   Authorization: Bearer <token>
+
+  POST  /token                    publico          Login -> devuelve el token
+  GET   /health                   publico          Estado de MySQL y del detector
+  GET   /figures                  autenticado      Catalogo de figuras activas
+  GET   /figures?all=true         autenticado      Incluye las desactivadas
+  POST  /predict                  autenticado      Valida una foto
+  POST  /sessions                 autenticado      Registra el intento
+  GET   /sessions                 SOLO DOCENTE     Historial de todo el curso
+  GET   /students/{id}/sessions   propio o docente Historial de un estudiante
+  GET   /students/{id}/stats      propio o docente Total, aprobados, IoU, accuracy
+
+  En /predict y /sessions el estudiante se toma DEL TOKEN, no del cuerpo de la
+  peticion: asi nadie puede anotar intentos a nombre de un compañero.
+
+  El servicio de vision (8001) es interno y no autentica. Expone POST /analyze
+  y GET /health.
+
+
+--------------------------------------------------------------------------------
+10. PROBLEMAS FRECUENTES
+--------------------------------------------------------------------------------
+  "/predict devuelve mock: true"
+      YOLO_WEIGHTS apunta a un archivo que no existe. Revisa el paso 1 y
+      confirma con /health que yolo_loaded sea true.
+
+  "El servicio de analisis no esta disponible" (error 503)
+      El proceso de Python no esta corriendo, o VISION_URL apunta a otro
+      puerto. Comprueba http://127.0.0.1:8001/health.
+
+  "Falta la variable de entorno JWT_SECRET" y el backend no arranca
+      Es a proposito. Genera el secreto con el comando del paso 3.1 y ponlo en
+      backend\.env.
+
+  "db_connected: false" o error de conexion de MySQL
+      El servicio de MySQL esta apagado, o el puerto/clave del .env no
+      coinciden. Verifica con el Test-NetConnection del paso 3.1.
+
+  "401 / la web me devuelve al login todo el tiempo"
+      El token caduco (12 h) o el backend se reinicio con otro JWT_SECRET.
+      Basta con volver a entrar.
+
+  "403 al abrir el dashboard"
+      Entraste como estudiante. El historial completo del curso es del docente.
+
+  "No se pudieron cargar los pesos del modelo"
+      Version de ultralytics mas vieja que la usada al entrenar. Reinstala con:
+      pip install -r requirements.txt --upgrade
+
+  "El celular no conecta pero en la PC si funciona"
+      En orden: 1) misma red Wi-Fi, 2) la IP no cambio, 3) firewall — y ojo,
+      ahora el ejecutable que escucha es node.exe, no python.exe (punto 7).
+
+  "El puerto 8000 ya esta en uso"
+      Hay otra instancia corriendo. Cierrala con el comando del paso 8, o
+      cambia PORT en backend\.env y actualiza la URL en la app.
+
+  "Activate.ps1 no se puede cargar / ejecucion de scripts deshabilitada"
+      Ejecuta el Set-ExecutionPolicy del paso 2, o llama al Python del entorno
+      directamente sin activarlo:
+      .\venv\Scripts\python.exe -m uvicorn service:app --port 8001
+
+  "El estudiante ve el spinner mucho tiempo"
+      /predict sube una foto y corre el detector; la app espera hasta 45
+      segundos y el backend corta a los 40. La primera foto tras arrancar tarda
+      un poco mas (PyTorch se calienta); despues baja a decimas de segundo.
+
+
+================================================================================
+RESUMEN - ARRANQUE DEL DIA A DIA (con todo ya instalado)
+================================================================================
+  1) Verifica que MySQL este corriendo.
+  2) Desde tangram-ia\ ejecuta:   .\dev.ps1
+     (o a mano, en dos ventanas:
+        cd vision-service ; .\venv\Scripts\python.exe -m uvicorn service:app --port 8001
+        cd backend        ; npm run dev)
+  3) Comprueba http://localhost:8000/health -> todos los valores en ok/true.
+     Si yolo_loaded sale false, la validacion es simulada: revisa el paso 1.
+  4) En el celular, misma Wi-Fi, la app apuntando a http://192.168.1.10:8000
+================================================================================

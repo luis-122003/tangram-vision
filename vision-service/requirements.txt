@@ -1,0 +1,32 @@
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+python-dotenv==1.0.1
+
+# CV / ML
+# El pipeline usa un solo modelo: YOLOv8s-seg. Todo lo demás (inventario de las
+# 7 fichas, solape, huecos, fichas sueltas y comparación de siluetas) es
+# geometría determinista en tangram_validator.py, con numpy y opencv.
+#
+# IMPORTANTE: ultralytics debe ser >= a la versión con la que se entrenó, o los
+# pesos no cargan. tangram_yolo.pt se guardó con ultralytics 8.4.79.
+ultralytics>=8.4.79
+opencv-python-headless>=4.9
+numpy>=1.26,<3
+
+# ─── Opcional: el U-Net como segunda opinión ─────────────────────────────────
+# Solo hace falta con UNET_ENABLED=1, que sirve para *medir* si el U-Net que se
+# retiró del pipeline aportaba algo (ver evaluar_siluetas.py). El servicio
+# arranca y califica sin esto: el módulo que lo usa importa TensorFlow dentro de
+# la función, no al cargarse, precisamente para que sea opcional de verdad.
+#
+#     pip install "tensorflow>=2.16" "keras>=3.0"
+#
+# Se deja comentado porque son ~600 MB que no necesita quien solo va a usar la
+# aplicación en el aula.
+# tensorflow>=2.16
+# keras>=3.0
+
+# MySQL, autenticación y formularios ya no aparecen aquí: este servicio no toca
+# la base de datos ni autentica a nadie. De eso se encarga el backend Node, que
+# es quien lee la figura objetivo y se la manda en la petición.

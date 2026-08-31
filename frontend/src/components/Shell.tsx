@@ -1,0 +1,107 @@
+import { useEffect, useState } from "react";
+import { getFigures } from "../api/client";
+import { ROLES } from "../constants";
+import { BRUT, T } from "../theme/brut";
+import GameScreen from "./GameScreen";
+import Logo from "./Logo";
+import StudentHome from "./StudentHome";
+import TeacherDashboard from "./TeacherDashboard";
+import type { Figure, User } from "../types";
+
+/**
+ * Navegación general: barra superior y la pantalla que toca según el rol.
+ *
+ * La barra se separa del contenido con un filete negro grueso, no con un
+ * degradado: en este estilo lo que divide es la línea.
+ */
+export default function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const [view,      setView]      = useState<"home" | "game" | "dashboard">(user.role === ROLES.TEACHER ? "dashboard" : "home");
+  const [activeFig, setActiveFig] = useState<Figure | null>(null);
+  const [figures,      setFigures]      = useState<Figure[]>([]);
+  const [figuresError, setFiguresError] = useState("");
+
+  // El catálogo de figuras objetivo (con sus siluetas) vive en MySQL.
+  useEffect(() => {
+    let cancelled = false;
+    getFigures()
+      .then(data => { if (!cancelled) setFigures(data); })
+      .catch(err => { if (!cancelled) setFiguresError(err.message ?? "Error de conexión"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const tabs = user.role === ROLES.TEACHER
+    ? [{ id: "dashboard" as const, label: "Dashboard" }]
+    : [{ id: "home" as const, label: "Mis figuras" }];
+
+  function handleSelectFigure(fig: Figure) {
+    setActiveFig(fig);
+    setView("game");
+  }
+
+  const iniciales = user.name.split(" ").map(n => n[0]).join("").slice(0, 2);
+
+  return (
+    <div style={{ minHeight: "100vh", background: BRUT.paper }}>
+      <nav style={{
+        background: BRUT.card,
+        borderBottom: `${BRUT.border}px solid ${BRUT.ink}`,
+        padding: "0 1.75rem", display: "flex", alignItems: "center", height: 68,
+        position: "sticky", top: 0, zIndex: 10,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginRight: "auto" }}>
+          <div style={{
+            width: 38, height: 38, display: "grid", placeItems: "center",
+            ...BRUT.raised(3, BRUT.paper),
+          }}>
+            <Logo size={18} />
+          </div>
+          <span style={{ ...T.title(16), letterSpacing: -0.3, textTransform: "uppercase" }}>
+            Tangram IA
+          </span>
+          {user.role === ROLES.TEACHER && (
+            <span style={{
+              ...T.eyebrow(BRUT.ink), fontSize: 10, padding: "5px 11px",
+              ...BRUT.subtle(BRUT.info),
+            }}>DOCENTE</span>
+          )}
+        </div>
+
+        {/* La pestaña activa se queda en color y aplastada contra su sombra,
+            como una tecla que no ha vuelto a subir. */}
+        <div style={{ display: "flex", gap: 10, marginRight: 18 }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setView(t.id)} style={{
+              padding: "9px 17px", fontSize: 13, cursor: "pointer",
+              fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
+              color: BRUT.ink,
+              ...BRUT.raised(4, view === t.id ? BRUT.accent : BRUT.card),
+              ...(view === t.id ? BRUT.pressed(4) : null),
+            }}>{t.label}</button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{
+            width: 38, height: 38, display: "grid", placeItems: "center",
+            fontSize: 13, fontWeight: 900, color: BRUT.ink,
+            ...BRUT.raised(3, BRUT.warning),
+          }}>{iniciales}</div>
+          <span style={{ fontSize: 13, fontWeight: 600, color: BRUT.ink }}>{user.name}</span>
+          <button onClick={onLogout} style={{
+            fontSize: 12, padding: "8px 15px", cursor: "pointer",
+            fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
+            color: BRUT.ink, ...BRUT.raised(3, BRUT.card),
+          }}>Salir</button>
+        </div>
+      </nav>
+
+      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "2rem 1.75rem" }}>
+        {view === "home"      && <StudentHome user={user} figures={figures}
+                                              figuresError={figuresError}
+                                              onSelectFigure={handleSelectFigure} />}
+        {view === "game"      && activeFig && <GameScreen user={user} figure={activeFig} onExit={() => setView("home")} />}
+        {view === "dashboard" && <TeacherDashboard figures={figures} />}
+      </main>
+    </div>
+  );
+}

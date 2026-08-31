@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Tangram IA. Misma geometría que src/components/Logo.tsx: tres piezas
+       encajadas en un cuadrado, color plano y filete negro. -->
+  <rect width="32" height="32" fill="#FCF6E8"/>
+  <g stroke="#111111" stroke-width="2" stroke-linejoin="miter">
+    <polygon points="3,3 29,3 16,16" fill="#FFD93D"/>
+    <polygon points="3,3 16,16 3,29" fill="#FF6B6B"/>
+    <polygon points="16,16 29,3 29,29" fill="#7DD3FC"/>
+  </g>
+  <rect x="1" y="1" width="30" height="30" fill="none" stroke="#111111" stroke-width="2"/>
+</svg>

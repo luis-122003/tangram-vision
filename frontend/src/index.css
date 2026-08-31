@@ -1,0 +1,140 @@
+:root {
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+  --font-mono: var(--mono);
+
+  font: 16px/145% var(--sans);
+  /* El estilo se apoya en tinta negra sobre papel claro y no tiene versión
+     oscura: invertirlo dejaría las sombras negras invisibles, y la sombra es
+     todo lo que sostiene el relieve de las placas. */
+  color-scheme: light;
+  /* `weight`, no `none`: los titulares van en 900 y la pila del sistema no
+     siempre trae un corte tan pesado. Con `none`, en esos equipos el 900 caería
+     a regular sin previo aviso y el estilo se desmontaría en silencio. */
+  font-synthesis: weight;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* ── Neobrutalismo ─────────────────────────────────────────────────────────
+     Cada elemento es una placa: fondo plano, filete negro y una sombra sólida
+     desplazada. Ningún blur en toda la hoja: la sombra no imita luz, es una
+     segunda silueta negra. */
+  --paper: #fcf6e8;
+  --card: #ffffff;
+  --well: #efe7d6;
+  --ink: #111111;
+
+  --border: 3px;
+  --border-thin: 2px;
+
+  --shadow-raised: 6px 6px 0 var(--ink);
+  --shadow-subtle: 3px 3px 0 var(--ink);
+
+  /* Acentos. Claros y saturados para que la tinta negra se lea encima: el peor
+     de los cinco da 6,80:1 sobre negro, por encima del 4,5:1 de WCAG AA. */
+  --success: #7bf1a8;
+  --warning: #ffd93d;
+  --danger: #ff6b6b;
+  --accent: #b197fc;
+  --info: #7dd3fc;
+
+  /* Tinta. `secondary` sube desde el #8794A6 del sistema anterior, que daba
+     2,43:1 sobre su fondo y no llegaba a AA; este da 8,86:1 sobre la placa. */
+  --color-background-primary: var(--paper);
+  --color-background-secondary: var(--card);
+  --color-background-tertiary: var(--well);
+  --color-border-secondary: var(--ink);
+  --color-border-tertiary: var(--ink);
+  --color-text-primary: var(--ink);
+  --color-text-secondary: #4a4a4a;
+  --color-text-tertiary: #4a4a4a;
+  --color-text-danger: var(--danger);
+
+  /* Radio cero, sin excepciones: basta una esquina redondeada para que la
+     pantalla entera se lea como otro estilo. */
+  --border-radius-md: 0;
+  --border-radius-lg: 0;
+  --border-radius-xl: 0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--color-text-secondary);
+}
+
+#root {
+  width: 100%;
+  min-height: 100svh;
+  text-align: left;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+}
+
+/* Los campos son huecos practicados en la página: fondo más oscuro que el de
+   alrededor y filete negro. Un hueco no proyecta sombra, así que no la lleva. */
+input {
+  padding: 12px 15px;
+  border: var(--border) solid var(--ink);
+  border-radius: 0;
+  outline: none;
+  background: var(--well);
+  box-shadow: none;
+  color: var(--color-text-primary);
+  transition: box-shadow 0.08s ease, transform 0.08s ease;
+}
+
+/* Al enfocar, el hueco se convierte en placa: sale de la página con su sombra.
+   Es una señal inequívoca y no depende de un color de acento, así que funciona
+   igual para quien no distinga los colores. */
+input:focus {
+  background: var(--card);
+  box-shadow: var(--shadow-subtle);
+}
+
+input::placeholder { color: var(--color-text-secondary); opacity: 0.75; }
+
+/* Un botón es una placa apoyada; al pulsarlo se desplaza hasta aplastarse
+   contra su propia sombra.
+   El `!important` es necesario en `box-shadow`: cada botón lleva la suya en el
+   atributo `style`, que de otro modo gana a esta regla. En `transform` no hace
+   falta, y es mejor no ponerlo para no bloquear un desplazamiento en línea.
+   Los 4px no son arbitrarios: `BRUT.button()` fija su sombra en 4px justamente
+   para que el botón aterrice sobre ella y no se quede deslizado a medias. */
+button {
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+button:not(:disabled):active {
+  transform: translate(4px, 4px);
+  box-shadow: none !important;
+}
+
+/* El sistema anterior no tenía forma de expresar el foco de teclado: no había
+   color de acento con que dibujarlo, y los campos llevaban `outline: none`.
+   Aquí sale gratis y en estilo. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Con filetes de verdad, las filas de la tabla ya no necesitan simularse con
+   sombras en las celdas: comparten borde. Ojo: con `collapse`, el navegador
+   ignora `border-radius` en las celdas —aquí da igual, porque el radio es 0. */
+table { border-collapse: collapse; }
+
+/* Las tarjetas del catálogo se desplazan al pasar por encima y los botones al
+   pulsarse. Para quien haya pedido menos movimiento, el cambio de sombra basta
+   para señalar lo mismo. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

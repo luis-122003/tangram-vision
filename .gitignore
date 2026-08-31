@@ -1,0 +1,47 @@
+# ─── Secretos ───────────────────────────────────────────────────────────────
+# Nunca se versiona un .env. Los ejemplos (.env.example) sí, y no llevan valores
+# reales: son la plantilla que cada quien copia en su máquina.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets.json
+credentials.json
+
+# ─── Dependencias y compilados ──────────────────────────────────────────────
+node_modules/
+dist/
+build/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+
+# ─── Modelos entrenados ─────────────────────────────────────────────────────
+# Pesan cientos de MB y no pertenecen al repositorio.
+*.pt
+*.keras
+*.h5
+*.onnx
+
+# ─── Android / Expo ─────────────────────────────────────────────────────────
+.expo/
+.gradle/
+mobile/android/
+mobile/ios/
+*.apk
+*.aab
+
+# ─── Registros y temporales ─────────────────────────────────────────────────
+*.log
+npm-debug.*
+# Permisos y ajustes de Claude Code propios de cada máquina.
+.claude/settings.local.json
+.DS_Store
+Thumbs.db

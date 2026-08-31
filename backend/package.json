@@ -1,0 +1,38 @@
+{
+  "name": "tangram-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "API de Tangram IA: autenticación, catálogo de figuras, sesiones y estadísticas. Delega el análisis de las fotos al servicio de visión.",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "rotar-secretos": "node scripts/rotar-secretos.mjs",
+    "probar-seguridad": "node scripts/probar-seguridad.mjs",
+    "auditar": "npm audit --omit=dev"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,48 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+# Se ignora `.env` a secas y no solo `.env*.local`: la plantilla de Expo deja
+# fuera el segundo pero no el primero, y basta un `.env` con una clave dentro
+# para publicarla sin darse cuenta.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
