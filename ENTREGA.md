@@ -34,6 +34,14 @@ Los tres `.env` tampoco se versionan. Cada uno tiene su `.env.example` al lado.
 `YOLO_WEIGHTS` apunta a un archivo que no existe. El punto 1 no lo comprueba:
 si MySQL está apagado, el backend levanta igual y falla al iniciar sesión.
 
+**Las fotos de los intentos (opcional).** Si `backend\.env` trae las variables
+`SUPABASE_*`, cada foto que manda el estudiante queda guardada y el docente la ve
+junto al intento en su panel. Sin ellas el sistema funciona igual, analizando la
+foto y descartándola: la única diferencia es que la columna «Foto» sale con una
+raya. Nunca impide jugar —si el almacén está caído, el intento se registra sin
+imagen—. Para configurarlo por primera vez, ver «Las fotos de los intentos» en el
+`README.md`; el bucket tiene que ser **privado**, porque son fotos de menores.
+
 ---
 
 ## 3. Arranque
@@ -75,6 +83,12 @@ no de la foto. **No se puede presentar así.** Se arregla revisando
       La primera foto después de arrancar tarda unos 2,4 s porque el modelo se
       calienta con ella; las siguientes, medio segundo. Esa foto se gasta ahora,
       no delante del jurado.
+- [ ] Si vas a enseñar las fotos en el panel del docente: abrir
+      `http://localhost:8000/health` y comprobar que dice
+      `"storage_enabled": true` **y** `"storage_connected": true`. Con el primero
+      en `false` faltan las credenciales; con el segundo en `false` el almacén no
+      responde. En los dos casos el sistema funciona, pero la columna «Foto» sale
+      vacía, y eso delante del jurado parece un error aunque no lo sea.
 - [ ] Tangram físico sobre una superficie lisa y **de color contrastado** con las
       fichas, sin sombras duras encima.
 - [ ] Si se muestra la app móvil:
@@ -98,6 +112,7 @@ no de la foto. **No se puede presentar así.** Se arregla revisando
 | Todo responde pero califica raro | modo demostración | revisar el recuadro rojo del arranque |
 | Login falla y el resto va | MySQL caído, o sesión vieja | reiniciar MySQL; volver a entrar |
 | Las ventanas se cierran solas al arrancar | ya había procesos en esos puertos | está funcionando; abrir `http://localhost:5173` |
+| El panel del docente no muestra las fotos | el almacén no está configurado, o no responde | mirar `storage_enabled` y `storage_connected` en `/health`. **No pares la demostración por esto**: el sistema califica igual, solo faltan las imágenes |
 
 Nota: si al abrir la app aparece que la sesión caducó, hay que **volver a
 iniciar sesión** y ya. No es un fallo del sistema.

@@ -70,6 +70,17 @@ rutasSalud.get("/health", async (_req, res) => {
     shape_matching: vision.shape_matching ?? null,
     models_loaded: vision.models_loaded ?? [],
     /**
+     * Con qué pesos arrancó el detector.
+     *
+     * `models_loaded` no sirve para esto: en `vision-service/models/` hay dos
+     * detectores y los dos son yolov8s-seg, así que ahí dicen lo mismo. Arrancar
+     * con el que no es no da ningún error —cargan igual y las cifras salen
+     * verosímiles—, y el único rastro que queda es el nombre del archivo. Sin
+     * este campo, comprobar que el servicio usa el detector que se midió obliga
+     * a entrar a la máquina.
+     */
+    yolo_weights: vision.yolo_weights ?? null,
+    /**
      * Estado del almacén de fotos. Son dos datos y no uno porque significan
      * cosas distintas: `storage_enabled` en `false` es una decisión —no hay
      * credenciales configuradas y las fotos no se guardan a propósito—, mientras

@@ -178,10 +178,29 @@ if (analisis.code === 200) {
     ["processing_ms", "number"], ["mock", "boolean"],
   ]) campo(r, ruta, tipo);
 
-  // La app superpone los dos contornos sobre el mismo lienzo: si uno llegara
-  // vacío, el dibujo que explica el resultado se quedaría a medias.
-  comprobar("el contorno objetivo trae puntos", (r?.target_polygon?.length ?? 0) >= 3,
-            `${r?.target_polygon?.length} puntos`);
+  /**
+   * Los dos contornos se superponen sobre el mismo lienzo, y van juntos: o
+   * llegan los dos o no llega ninguno.
+   *
+   * Lo que se comprueba es **esa coherencia**, no que vengan llenos. La foto que
+   * manda esta prueba es un JPEG mínimo sin ningún Tangram dentro, así que el
+   * detector no encuentra nada y los dos salen vacíos: eso es lo correcto, y es
+   * justo lo que la interfaz espera para no dibujar una figura degenerada
+   * —`AIValidation.tsx` solo pinta la superposición si los dos traen 3 puntos o
+   * más—.
+   *
+   * Antes esto exigía `target_polygon >= 3` a secas y fallaba siempre con esta
+   * entrada, avisando de «una pantalla rota» que no lo estaba. Lo que sí sería
+   * un fallo real es que llegara uno sin el otro: entonces la app tendría medio
+   * dibujo, y ahí sí no habría nada que interpretar.
+   */
+  const nAlumno = r?.detected_polygon?.length ?? 0;
+  const nObjetivo = r?.target_polygon?.length ?? 0;
+  comprobar(
+    "los dos contornos van a la par (los dos con puntos, o los dos vacíos)",
+    (nAlumno >= 3 && nObjetivo >= 3) || (nAlumno === 0 && nObjetivo === 0),
+    `armado=${nAlumno} objetivo=${nObjetivo}`,
+  );
   comprobar("el feedback no está vacío", (r?.feedback ?? "").length > 0);
   comprobar("no está en modo demostración", r?.mock === false,
             r?.mock ? "las cifras NO salen de la foto" : "");

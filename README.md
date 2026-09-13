@@ -397,12 +397,65 @@ sesiones abiertas en los demás dispositivos.
 
 Backend: http://localhost:8000 · Estado: http://localhost:8000/health
 
-Para comprobar que las piezas sueltas siguen bien —sin necesidad de MySQL ni
-del servidor levantado—:
+Para comprobar que el sistema hace lo que dice. Las dos baterías van **contra el
+servidor levantado**, no contra el código: comprueban el comportamiento real, que
+es lo que le llega al estudiante.
 
 ```bash
-npm test          # pruebas unitarias del backend
+npm run probar-seguridad   # 40 comprobaciones: permisos, cifrado, fuerza bruta,
+                           # subidas, cabeceras, revocación de sesión
+node scripts/probar-contrato-movil.mjs   # 83 comprobaciones de la forma exacta
+                           # que la app móvil espera en cada respuesta
+npm run auditar            # vulnerabilidades de las dependencias de producción
 ```
+
+### 2b. Las fotos de los intentos
+
+**Es opcional.** Sin configurar, el sistema funciona igual: la foto se analiza y
+se descarta. Configurado, el docente ve junto a cada intento la foto que tomó el
+estudiante, que es lo que permite interpretar el resultado —un IoU del 42 % no
+dice si el niño armó mal la figura, si la foto salió movida o si había media mesa
+en el encuadre—.
+
+Hace falta una cuenta de [Supabase](https://supabase.com) (el plan gratuito
+basta):
+
+1. Crea un proyecto. Su URL es `https://<id-del-proyecto>.supabase.co`.
+2. **Storage → New bucket**, de nombre `intentos`, y **desmarca «Public
+   bucket»**. Que sea privado no es opcional: son fotos de menores, y de ahí
+   depende que no exista ninguna URL que funcione sin firmar.
+3. **Project Settings → API Keys**, y copia la clave **`sb_secret_…`** (hay que
+   pulsar *Reveal*). **No sirve la `sb_publishable_…`**: las políticas RLS la
+   bloquean, y el error que da —«new row violates row-level security policy»— no
+   se parece en nada a «te equivocaste de clave».
+4. Añade las cuatro variables a `backend/.env`:
+
+```bash
+SUPABASE_URL=https://<id-del-proyecto>.supabase.co
+SUPABASE_SERVICE_KEY=sb_secret_...   # NUNCA la publishable
+SUPABASE_BUCKET=intentos
+SUPABASE_SIGN_TTL=60
+```
+
+Conviene además limitarle el bucket desde su configuración: 12 MB por archivo y
+solo `image/jpeg`, `image/png`, `image/webp`, `image/bmp`. El backend ya valida
+las dos cosas; ponerlo también en el bucket es la segunda barrera por si alguna
+vez se le escapa algo a la primera.
+
+La clave `service_role` **salta todas las políticas RLS**, así que vive solo en
+el servidor: ningún cliente habla con Supabase, igual que ninguno habla con
+MySQL. Si alguna vez aparece en una captura o un documento, hay que rotarla desde
+el panel.
+
+Para comprobar que quedó bien, `GET /health` debe responder:
+
+```json
+{ "storage_enabled": true, "storage_connected": true }
+```
+
+Los dos campos dicen cosas distintas: `storage_enabled: false` significa que no
+hay credenciales y las fotos **no se guardan a propósito**; `enabled: true` con
+`connected: false` es una avería que hay que mirar.
 
 ### 3. Frontend
 ```bash
@@ -491,6 +544,19 @@ VISION_TIMEOUT_MS=40000
 
 # La foto viaja en base64, que abulta un tercio más que el JPEG.
 MAX_IMAGE_MB=12
+
+# Almacén de las fotos de los intentos. OPCIONAL: sin SUPABASE_URL el sistema
+# funciona igual, analizando la foto y descartándola. Ver «Las fotos de los
+# intentos» en el Setup rápido para crear el bucket, que debe ser PRIVADO.
+SUPABASE_URL=
+# La clave sb_secret_… (service_role), NUNCA la sb_publishable_…: esta última la
+# bloquean las políticas RLS. No sale del servidor.
+SUPABASE_SERVICE_KEY=
+SUPABASE_BUCKET=intentos
+# Cuánto vive la URL firmada con la que el docente ve una foto. Un minuto basta
+# para que el navegador la cargue y es poco para que el enlace, si acaba copiado
+# en un chat, siga sirviendo a nadie.
+SUPABASE_SIGN_TTL=60
 ```
 
 **vision-service/.env** — detector y umbrales del validador
@@ -532,7 +598,7 @@ explica que no cuenta en contra.
 | POST   | `/token`                   | público           | Login (bcrypt) → token de acceso y de refresco |
 | POST   | `/token/refresh`           | público           | Renueva el token de acceso                     |
 | POST   | `/logout`                  | autenticado       | Cierra la sesión en todos los dispositivos     |
-| GET    | `/health`                  | público           | MySQL, detector, umbral y cómo se compara      |
+| GET    | `/health`                  | público           | MySQL, detector, almacén de fotos, umbral y cómo se compara |
 | GET    | `/figures`                 | autenticado       | Catálogo de figuras activas con sus siluetas   |
 | GET    | `/figures?all=true`        | autenticado       | Incluye también las figuras desactivadas       |
 | POST   | `/predict`                 | autenticado       | Valida una foto contra la figura objetivo      |
@@ -545,10 +611,29 @@ explica que no cuenta en contra.
 | POST   | `/students`                | **docente**       | Alta. La clave la elige el docente o la genera el servidor |
 | PATCH  | `/students/{id}`           | **docente**       | Cambia nombre o correo (la clave, no)          |
 | POST   | `/students/{id}/password/reset` | **docente**  | Clave nueva y cierra sus sesiones abiertas     |
-| DELETE | `/students/{id}`           | **docente**       | Baja, **con todos sus intentos**               |
+| DELETE | `/students/{id}`           | **docente**       | Baja, **con todos sus intentos y sus fotos**   |
 
 Los listados devuelven `{ rows, total, limit, offset }` y nunca más de 100 filas,
 por mucho que se pidan.
+
+**La foto del intento.** `/predict` devuelve `image_path`: la ruta donde quedó
+guardada la foto, o `null` si no se guardó. El cliente la devuelve tal cual en el
+cuerpo de `/sessions` para que el intento y su foto queden atados —es el único
+camino, porque la foto se sube durante `/predict`, cuando todavía no existe la
+fila de `sessions` a la que pertenecer—. Como esa ruta viaja por el cliente, el
+servidor comprueba que sea suya antes de guardarla; una ruta ajena se descarta y
+el intento se registra sin foto.
+
+El listado del docente añade `image_url` a cada fila: la URL **ya firmada** para
+ver esa foto. Caduca en `SUPABASE_SIGN_TTL` segundos (60 por defecto), así que no
+se puede guardar ni compartir; para volver a verla hay que recargar el listado.
+Ver «[Las fotos de los intentos](#2b-las-fotos-de-los-intentos)».
+
+`/health` informa además de `yolo_weights`, el archivo de pesos con el que
+arrancó el detector. No es un adorno: en `vision-service/models/` conviven dos
+detectores y los dos son `yolov8s-seg`, así que arrancar con el que no es no
+produce ningún error —`yolo_loaded` sale `true` igual y las cifras son
+verosímiles—. El nombre del archivo es lo único que los distingue.
 
 `/health` queda sin autenticar a propósito: la pantalla de ajustes de la app
 móvil la usa para comprobar la dirección del servidor *antes* de iniciar sesión.

@@ -39,6 +39,20 @@ export interface EstadoVision {
   shape_matching?: string;
   /** Modelos realmente cargados. Es uno solo: el detector de fichas. */
   models_loaded?: string[];
+  /**
+   * Nombre del archivo de pesos con el que arrancó el detector.
+   *
+   * En `vision-service/models/` conviven dos detectores y **los dos son
+   * yolov8s-seg**: arrancar con el que no es no produce ningún error. Cargan
+   * igual, `yolo_loaded` sale `true`, `models_loaded` dice lo mismo para ambos
+   * y las cifras que devuelven son verosímiles —solo que medidas con otra
+   * taxonomía de clases—. Lo único que los distingue es el nombre del archivo.
+   *
+   * Por eso viaja hasta `/health`: es el único sitio donde se puede comprobar,
+   * sin entrar a la máquina, que el servicio está usando el detector que se
+   * midió y no el anterior.
+   */
+  yolo_weights?: string | null;
 }
 
 /**
