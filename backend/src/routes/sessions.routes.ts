@@ -21,6 +21,7 @@ import {
   idDeRuta,
   soloEstudiante,
 } from "../auth/middleware.js";
+import { rutaPerteneceA } from "../storage/supabase.js";
 import { noAutorizado } from "../http/errors.js";
 import { config } from "../config.js";
 
@@ -47,6 +48,23 @@ const esquemaSesion = z.object({
   errors: z.number().int().min(0).max(10_000),
   /** La app lo envía; la hora que vale es la que pone MySQL al insertar. */
   timestamp: z.string().max(40).optional(),
+  /**
+   * Ruta de la foto en el bucket, tal como la devolvió `/predict`.
+   *
+   * El formato se acota aquí —`{id}/{año-mes}/{uuid}.{ext}`— y la pertenencia se
+   * comprueba abajo. Son dos cosas distintas: esto impide que llegue una ruta
+   * con `../` o con caracteres raros; lo de abajo impide que llegue la ruta
+   * legítima de otro estudiante.
+   *
+   * `.catch(null)` por la regla de siempre: una ruta mal formada hace que el
+   * intento se guarde sin foto, no que se pierda el intento.
+   */
+  image_path: z
+    .string()
+    .max(255)
+    .regex(/^\d+\/\d{4}-\d{2}\/[0-9a-f-]{36}\.(jpg|png|webp|bmp)$/i, "Ruta de foto no válida")
+    .nullish()
+    .catch(null),
 });
 
 /**
@@ -71,6 +89,29 @@ rutasSesiones.post(
     const usuario = req.usuario;
     if (!usuario) throw noAutorizado();
 
+    /**
+     * La ruta de la foto llega del cliente, así que se comprueba que sea suya.
+     *
+     * Sin esto, un estudiante podría anotar en su intento la foto de un
+     * compañero: no conoce la ruta exacta, pero el primer segmento es el id y el
+     * resto se puede ir probando. El panel del docente se la enseñaría como
+     * suya, que es precisamente la confusión que las fotos vienen a evitar.
+     *
+     * Una ruta ajena se descarta en silencio y el intento se guarda sin foto —no
+     * se rechaza la petición—: si algún día la app manda algo raro, el niño no
+     * se queda sin poder registrar lo que acaba de armar.
+     */
+    const imagenRuta =
+      datos.image_path && rutaPerteneceA(datos.image_path, usuario.id)
+        ? datos.image_path
+        : null;
+
+    if (datos.image_path && !imagenRuta) {
+      console.warn(
+        `[sessions] el estudiante ${usuario.id} mandó una ruta de foto que no es suya`,
+      );
+    }
+
     await insertarSesion({
       student_id: usuario.id,        // del token, nunca del cuerpo
       figure_id: datos.figure_id,
@@ -78,6 +119,7 @@ rutasSesiones.post(
       iou_score: datos.iou_score,
       time_seconds: datos.time_seconds,
       errors: datos.errors,
+      image_path: imagenRuta,
     });
     res.json({ ok: true });
   },

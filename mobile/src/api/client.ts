@@ -350,6 +350,14 @@ export async function predict(
 export async function saveSession(record: {
   studentId: number; figureSlug: string; match: boolean;
   iou: number; timeSeconds: number; errors: number;
+  /**
+   * Ruta de la foto que devolvió `/predict`, tal cual y sin tocar.
+   *
+   * La app no la interpreta ni la construye: solo la devuelve para que el
+   * servidor pueda atar la foto al intento. Llega `null` cuando el almacén está
+   * apagado o no pudo guardarla, y entonces el intento se registra sin foto.
+   */
+  imagePath?: string | null;
 }): Promise<void> {
   // `student_id` ya no se envía: el servidor lo toma del token. Si se mandara,
   // lo ignoraría igualmente, y aceptarlo permitiría anotar intentos a nombre de
@@ -362,6 +370,7 @@ export async function saveSession(record: {
       iou_score:    record.iou,
       time_seconds: record.timeSeconds,
       errors:       record.errors,
+      image_path:   record.imagePath ?? null,
     }),
   });
 }

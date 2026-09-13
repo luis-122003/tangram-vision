@@ -328,6 +328,11 @@ export default function GameScreen({
       void guardarIntento({
         studentId: user.id, figureSlug: figure.slug, match: data.match,
         iou: data.iou_score, timeSeconds: seconds, errors: failed,
+        // La ruta de la foto vuelve tal como la mandó el servidor. Va dentro del
+        // registro y no en una llamada aparte para que el reintento de
+        // `guardarIntento` la arrastre consigo: si la red falla y el estudiante
+        // vuelve a darle a guardar, el intento se anota con su foto y no sin ella.
+        imagePath: data.image_path ?? null,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al analizar");

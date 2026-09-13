@@ -171,6 +171,18 @@ export interface SessionRow {
   time_seconds:  number;
   errors:        number;
   created_at:    string;
+  /** Ruta de la foto en el almacén. No sirve para mostrarla: usa `image_url`. */
+  image_path?:   string | null;
+  /**
+   * URL ya firmada para ver la foto del intento, o `null` si no hay.
+   *
+   * **Caduca en un minuto.** El servidor la firma al servir el listado, así que
+   * no se puede guardar, ni cachear, ni meter en un enlace para más tarde: si la
+   * pestaña lleva un rato abierta, hay que recargar el listado para volver a
+   * verla. Es deliberado —son fotos de menores en un bucket privado— y es la
+   * razón de que el backend mande la URL en vez de dejar que el panel la arme.
+   */
+  image_url?:    string | null;
 }
 
 // ─── Estadísticas del estudiante ────────────────────────────────────────────────

@@ -36,6 +36,13 @@ export interface ImagenValidada {
   base64: string;
   formato: string;
   bytes: number;
+  /**
+   * La foto ya decodificada. Se devuelve porque quien la guarda en Supabase la
+   * necesita en bytes, y aquí ya se decodificó para mirarle la firma: volver a
+   * hacer `Buffer.from(base64)` en la ruta sería decodificar dos veces la misma
+   * foto de varios megas por petición.
+   */
+  datos: Buffer;
 }
 
 /**
@@ -106,5 +113,5 @@ export function validarImagen(entrada: string): ImagenValidada {
     );
   }
 
-  return { base64: limpio, formato: firma.formato, bytes: buf.length };
+  return { base64: limpio, formato: firma.formato, bytes: buf.length, datos: buf };
 }

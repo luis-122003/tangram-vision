@@ -93,10 +93,27 @@ export interface Sesion {
   time_seconds: number;
   errors: number;
   created_at: Date;
+  /**
+   * Ruta de la foto dentro del bucket de Supabase, o `null` si no hay.
+   *
+   * Es `null` en dos casos normales: los intentos anteriores a que existiera el
+   * almacén, y los registrados mientras Supabase no responde —subir la foto no
+   * puede impedir que el intento se guarde—. Nunca es una URL: las rutas no
+   * sirven para nada sin firmar, y firmarlas caduca en un minuto.
+   */
+  image_path: string | null;
 }
 
 /** Fila del dashboard docente: la sesión con los datos del estudiante. */
 export interface SesionConEstudiante extends Sesion {
   student_name: string;
   student_email: string;
+  /**
+   * URL temporal para ver la foto, ya firmada. `null` cuando no hay foto o
+   * cuando el almacén no pudo firmarla.
+   *
+   * Se calcula al servir el listado y no se guarda en ningún sitio, porque
+   * caduca en `SUPABASE_SIGN_TTL` segundos.
+   */
+  image_url: string | null;
 }

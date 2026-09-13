@@ -28,6 +28,7 @@ import {
   revocarSesiones,
 } from "../db/users.js";
 import { exigirDocente, exigirSesion, idDeRuta } from "../auth/middleware.js";
+import { borrarFotosDe } from "../storage/supabase.js";
 import { generarClaveTemporal } from "../security/clave-temporal.js";
 import { HttpError, noEncontrado } from "../http/errors.js";
 
@@ -197,9 +198,24 @@ rutasEstudiantes.post(
  * Se lleva por delante sus intentos (`sessions` está declarada con
  * `ON DELETE CASCADE`), así que la interfaz tiene que pedir confirmación: desde
  * aquí no hay vuelta atrás.
+ *
+ * Y se lleva también sus fotos. `ON DELETE CASCADE` solo alcanza a MySQL: sin
+ * este paso, las fotos del niño seguirían en Supabase después de darlo de baja,
+ * que es exactamente lo que no puede pasar con imágenes de menores.
+ *
+ * Las fotos van **primero**, y el orden se eligió por cuál es el peor final de
+ * cada uno. Borrando la cuenta antes, si luego falla el almacén quedan fotos de
+ * un niño que ya no existe en el sistema y a las que nadie volverá a apuntar:
+ * son datos de un menor sin dueño ni rastro. Borrando las fotos antes, si luego
+ * falla MySQL se pierden las imágenes de un estudiante que sigue de alta —una
+ * pérdida real, pero visible y sin riesgo para él—. Entre perder evidencias y
+ * dejar huérfanas las fotos de un menor, se pierde la evidencia.
  */
 rutasEstudiantes.delete("/students/:id", exigirSesion, exigirDocente, async (req, res) => {
   const id = idDeRuta.parse(req.params.id);
+
+  const fotos = await borrarFotosDe(id);
+
   if (!(await eliminarEstudiante(id))) throw noEncontrado("Ese estudiante no existe");
-  res.json({ ok: true });
+  res.json({ ok: true, fotos_borradas: fotos });
 });

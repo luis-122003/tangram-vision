@@ -105,7 +105,7 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
               <thead>
                 {/* Cabecera en negativo: es la fila que no son datos. */}
                 <tr style={{ background: BRUT.ink }}>
-                  {["Estudiante", "Figura", "Resultado", "IoU", "Tiempo", "Errores", "Fecha"].map(h => (
+                  {["Estudiante", "Figura", "Foto", "Resultado", "IoU", "Tiempo", "Errores", "Fecha"].map(h => (
                     <th key={h} style={{
                       ...T.eyebrow(BRUT.paper), fontSize: 10,
                       padding: "11px 15px", textAlign: "left",
@@ -123,6 +123,42 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
                       </td>
                       <td style={{ ...celda, color: BRUT.ink, fontWeight: 500 }}>
                         {fig?.name || a.figure_id}
+                      </td>
+                      {/*
+                        La foto del intento. Es la columna que permite
+                        interpretar el resto: un IoU del 42% no dice si el niño
+                        armó mal la figura, si la foto salió movida o si había
+                        media mesa en el encuadre.
+
+                        La miniatura abre la imagen a tamaño completo en otra
+                        pestaña. La URL viene firmada del servidor y caduca al
+                        minuto, así que un enlace copiado no sirve a nadie: es a
+                        propósito, son fotos de menores.
+                      */}
+                      <td style={celda}>
+                        {a.image_url ? (
+                          <a
+                            href={a.image_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Ver la foto del intento de ${a.student_name || "el estudiante"} a tamaño completo`}
+                            style={{ display: "block", width: 46, height: 46 }}
+                          >
+                            <img
+                              src={a.image_url}
+                              alt={`Foto del intento de ${a.student_name || "el estudiante"} sobre ${fig?.name || a.figure_id}`}
+                              style={{
+                                width: 46, height: 46, objectFit: "cover",
+                                border: `${BRUT.borderThin}px solid ${BRUT.ink}`,
+                                display: "block",
+                              }}
+                            />
+                          </a>
+                        ) : (
+                          // Raya, no hueco: deja claro que ese intento no tiene
+                          // foto en vez de parecer una imagen que no cargó.
+                          <span style={{ color: BRUT.muted, fontWeight: 700 }} title="Este intento no tiene foto guardada">—</span>
+                        )}
                       </td>
                       <td style={celda}>
                         {/* Verde o rojo, con la palabra escrita al lado: el

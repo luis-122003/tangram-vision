@@ -38,6 +38,22 @@ function cabeceras(): Record<string, string> {
 }
 
 /**
+ * Los formatos que `validarImagen` reconoce, con su extensión y su tipo MIME.
+ *
+ * La tabla es una sola para que extensión y `Content-Type` no puedan discrepar.
+ * Antes la extensión se decidía con `tipo === "image/png" ? "png" : "jpg"`, que
+ * guardaba un WebP como `.jpg`: el navegador del docente se lo tragaba por el
+ * `Content-Type`, pero el archivo quedaba con el nombre mintiendo sobre su
+ * contenido, y eso se paga al exportar o al depurar meses después.
+ */
+const FORMATOS: Record<string, { ext: string; mime: string }> = {
+  jpeg: { ext: "jpg",  mime: "image/jpeg" },
+  png:  { ext: "png",  mime: "image/png"  },
+  webp: { ext: "webp", mime: "image/webp" },
+  bmp:  { ext: "bmp",  mime: "image/bmp"  },
+};
+
+/**
  * Ruta dentro del bucket: `{id del estudiante}/{año-mes}/{uuid}.{ext}`.
  *
  * El id va **primero** y eso no es cosmético: dar de baja a un estudiante tiene
@@ -49,11 +65,25 @@ function cabeceras(): Record<string, string> {
  * que pertenecer —y puede que no llegue a existir, si el niño no registra el
  * intento—.
  */
-function rutaDeFoto(estudianteId: number, tipo: string): string {
+function rutaDeFoto(estudianteId: number, formato: string): string {
   const ahora = new Date();
   const mes = `${ahora.getUTCFullYear()}-${String(ahora.getUTCMonth() + 1).padStart(2, "0")}`;
-  const extension = tipo === "image/png" ? "png" : "jpg";
-  return `${estudianteId}/${mes}/${randomUUID()}.${extension}`;
+  const ext = FORMATOS[formato]?.ext ?? "jpg";
+  return `${estudianteId}/${mes}/${randomUUID()}.${ext}`;
+}
+
+/**
+ * ¿Esta ruta es de este estudiante?
+ *
+ * La ruta de la foto viaja al cliente en la respuesta de `/predict` y vuelve en
+ * el cuerpo de `/sessions`, así que llega de fuera y no puede creerse sin más:
+ * sin esta comprobación, un estudiante podría anotar en su intento la foto de un
+ * compañero —cuya ruta no conoce, pero que se adivina probando ids—, y el panel
+ * del docente se la mostraría como suya. Se apoya en que el id del estudiante es
+ * el primer segmento de la ruta, que es justo lo que `rutaDeFoto` garantiza.
+ */
+export function rutaPerteneceA(ruta: string, estudianteId: number): boolean {
+  return ruta.startsWith(`${estudianteId}/`);
 }
 
 /**
@@ -66,11 +96,11 @@ function rutaDeFoto(estudianteId: number, tipo: string): string {
  * del niño, y no son comparables.
  */
 export async function subirFoto(
-  estudianteId: number, imagen: Buffer, tipo: string,
+  estudianteId: number, imagen: Buffer, formato: string,
 ): Promise<string | null> {
   if (!config.storage.activo) return null;
 
-  const ruta = rutaDeFoto(estudianteId, tipo);
+  const ruta = rutaDeFoto(estudianteId, formato);
   const url =
     `${config.storage.url}/storage/v1/object/${config.storage.bucket}/${ruta}`;
 
@@ -79,7 +109,7 @@ export async function subirFoto(
       method: "POST",
       headers: {
         ...cabeceras(),
-        "Content-Type": tipo,
+        "Content-Type": FORMATOS[formato]?.mime ?? "image/jpeg",
         // Que dos intentos no puedan pisarse: el nombre es un UUID, así que un
         // choque significaría que algo va mal y es mejor enterarse.
         "x-upsert": "false",
@@ -134,6 +164,58 @@ export async function urlFirmada(ruta: string): Promise<string | null> {
   } catch (error) {
     console.error(`[storage] no se pudo firmar ${ruta}:`, error);
     return null;
+  }
+}
+
+/**
+ * Firma varias rutas de una vez. Devuelve un mapa `ruta → URL firmada`.
+ *
+ * Existe por el listado del docente, que puede traer cien intentos: firmarlos
+ * uno a uno son cien peticiones a Supabase encadenadas antes de poder responder,
+ * y el panel se quedaría en blanco mientras tanto. Supabase tiene un extremo
+ * para firmar en lote y esto lo usa; si falla, el mapa vuelve vacío y el panel
+ * se pinta igual, con los intentos sin foto.
+ *
+ * Las rutas que Supabase no pueda firmar —una foto borrada a mano, por ejemplo—
+ * simplemente no aparecen en el mapa, y quien lo consulta obtiene `null`.
+ */
+export async function urlsFirmadas(rutas: string[]): Promise<Map<string, string>> {
+  const mapa = new Map<string, string>();
+  if (!config.storage.activo || rutas.length === 0) return mapa;
+
+  try {
+    const res = await fetch(
+      `${config.storage.url}/storage/v1/object/sign/${config.storage.bucket}`,
+      {
+        method: "POST",
+        headers: { ...cabeceras(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expiresIn: config.storage.firmaSegundos,
+          paths: rutas,
+        }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+    if (!res.ok) {
+      console.error(`[storage] no se pudieron firmar ${rutas.length} rutas (HTTP ${res.status})`);
+      return mapa;
+    }
+
+    const cuerpo = (await res.json()) as Array<{
+      path?: string | null;
+      signedURL?: string | null;
+      error?: string | null;
+    }>;
+
+    for (const entrada of cuerpo) {
+      if (!entrada.path || !entrada.signedURL || entrada.error) continue;
+      const sep = entrada.signedURL.startsWith("/") ? "" : "/";
+      mapa.set(entrada.path, `${config.storage.url}/storage/v1${sep}${entrada.signedURL}`);
+    }
+    return mapa;
+  } catch (error) {
+    console.error("[storage] fallo al firmar en lote:", error);
+    return mapa;
   }
 }
 

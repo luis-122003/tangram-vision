@@ -133,6 +133,15 @@ export interface PredictResponse {
   warnings:         string[];
   processing_ms:   number;
   mock:            boolean;
+  /**
+   * Ruta de la foto guardada en el almacén, para devolverla al registrar el
+   * intento en `/sessions`. La app no la lee ni la construye: la pasa tal cual.
+   *
+   * Opcional porque un backend anterior no la manda, y `null` cuando el almacén
+   * está apagado o no pudo guardar la foto. En los dos casos el intento se
+   * registra igual, sin imagen.
+   */
+  image_path?:     string | null;
 }
 
 export interface StudentStats {

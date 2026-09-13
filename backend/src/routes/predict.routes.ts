@@ -13,7 +13,8 @@ import { analizar } from "../vision/client.js";
 import { exigirClaveDefinitiva, exigirSesion } from "../auth/middleware.js";
 import { limitePredict } from "../security/headers.js";
 import { validarImagen } from "../security/imagen.js";
-import { noEncontrado } from "../http/errors.js";
+import { subirFoto } from "../storage/supabase.js";
+import { noAutorizado, noEncontrado } from "../http/errors.js";
 
 export const rutasPredict = Router();
 
@@ -70,6 +71,9 @@ rutasPredict.post(
   async (req, res) => {
     const datos = esquemaPredict.parse(req.body);
 
+    const usuario = req.usuario;
+    if (!usuario) throw noAutorizado();
+
     // Antes de nada: ¿esto es una foto? Se comprueba por los bytes, no por lo que
     // diga el cliente. Va primero para no gastar una consulta ni un segundo de
     // detector en algo que no lo es.
@@ -78,16 +82,39 @@ rutasPredict.post(
     const figura = await obtenerFigura(datos.figure_id);
     if (!figura) throw noEncontrado(`Figura '${datos.figure_id}' no encontrada`);
 
-    const resultado = await analizar({
-      image_b64: imagen.base64,
-      crop: datos.crop ?? null,
-      figure: {
-        slug: figura.slug,
-        name: figura.name,
-        silhouette: figura.silhouette,
-      },
-    });
+    /**
+     * El análisis y la subida van **a la vez**, no una detrás de otra.
+     *
+     * Son independientes —el detector no necesita que la foto esté guardada, y
+     * guardarla no necesita el resultado—, así que encadenarlas le sumaría al
+     * niño el tiempo del almacén encima del del detector sin ganar nada.
+     *
+     * `subirFoto` no lanza nunca: si Supabase está caído o apagado devuelve
+     * `null`, y el `Promise.all` no se rompe. Lo único que se pierde entonces es
+     * la foto; el análisis sigue su curso, que es la regla de siempre.
+     */
+    const [resultado, imagenRuta] = await Promise.all([
+      analizar({
+        image_b64: imagen.base64,
+        crop: datos.crop ?? null,
+        figure: {
+          slug: figura.slug,
+          name: figura.name,
+          silhouette: figura.silhouette,
+        },
+      }),
+      subirFoto(usuario.id, imagen.datos, imagen.formato),
+    ]);
 
-    res.json(resultado);
+    /**
+     * La ruta vuelve al cliente para que la reenvíe al registrar el intento en
+     * `/sessions`. Es el único camino: la foto se sube durante `/predict`,
+     * cuando todavía no hay fila de `sessions` a la que atarla —y puede que no
+     * llegue a haberla, si el niño no registra el intento—.
+     *
+     * Que viaje por el cliente obliga a no fiarse de lo que vuelva, y de eso se
+     * encarga `rutaPerteneceA` en `/sessions`.
+     */
+    res.json({ ...resultado, image_path: imagenRuta });
   },
 );

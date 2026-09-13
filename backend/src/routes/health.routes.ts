@@ -14,7 +14,9 @@
 import { Router } from "express";
 import { baseDeDatosViva, metricas } from "../db/pool.js";
 import { estado } from "../vision/client.js";
+import { comprobarStorage } from "../storage/supabase.js";
 import { exigirDocente, exigirSesion } from "../auth/middleware.js";
+import { config } from "../config.js";
 
 export const rutasSalud = Router();
 
@@ -44,7 +46,11 @@ rutasSalud.get("/health", async (_req, res) => {
     return;
   }
 
-  const [db_connected, vision] = await Promise.all([baseDeDatosViva(), estado()]);
+  const [db_connected, vision, storage_connected] = await Promise.all([
+    baseDeDatosViva(),
+    estado(),
+    comprobarStorage(),
+  ]);
 
   const cuerpo = {
     status: "ok",
@@ -63,6 +69,16 @@ rutasSalud.get("/health", async (_req, res) => {
      */
     shape_matching: vision.shape_matching ?? null,
     models_loaded: vision.models_loaded ?? [],
+    /**
+     * Estado del almacén de fotos. Son dos datos y no uno porque significan
+     * cosas distintas: `storage_enabled` en `false` es una decisión —no hay
+     * credenciales configuradas y las fotos no se guardan a propósito—, mientras
+     * que `enabled` en `true` con `connected` en `false` es una avería que hay
+     * que mirar. Sin distinguirlos, el docente ve «sin fotos» en los dos casos y
+     * no sabe si le falta configurar algo o si algo se rompió.
+     */
+    storage_enabled: config.storage.activo,
+    storage_connected,
   };
 
   cacheSalud = { en: ahora, cuerpo };
