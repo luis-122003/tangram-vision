@@ -61,7 +61,6 @@
     "extra": {
       "apiUrl": "http://192.168.1.10:8000",
       "apiUrls": [
-        { "etiqueta": "Casa", "url": "http://192.168.1.10:8000" },
         { "etiqueta": "Universidad", "url": "http://192.168.1.10:8000" },
         { "etiqueta": "Universidad (anterior)", "url": "http://192.168.1.11:8000" }
       ]

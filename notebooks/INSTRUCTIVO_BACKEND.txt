@@ -1,10 +1,27 @@
-================================================================================
+﻿================================================================================
 INSTRUCTIVO DE LEVANTAMIENTO DEL BACKEND - TANGRAM IA
 ================================================================================
 Proyecto : Sistema inteligente de validacion de configuraciones Tangram
 Backend  : Node.js + Express + MySQL   (carpeta tangram-ia/backend)
 Vision   : Python + YOLOv8s-seg + validador geometrico
                                        (carpeta tangram-ia/vision-service)
+================================================================================
+
+NOTA SOBRE LAS RUTAS
+--------------------
+En los comandos de abajo, %RUTA_DEL_PROYECTO% es la carpeta donde tengas
+descargado el repositorio. Sustituyela por la tuya, por ejemplo:
+
+     C:\Proyectos\tangram-ia
+
+En PowerShell puedes ahorrartelo definiendola una vez por sesion:
+
+     $env:RUTA_DEL_PROYECTO = "C:\Proyectos\tangram-ia"
+     cd "$env:RUTA_DEL_PROYECTO\backend"
+
+Va como marcador y no como una ruta concreta porque una ruta real solo
+funciona en el equipo de quien la escribio, y de paso lleva su nombre de
+usuario de Windows dentro.
 ================================================================================
 
 SON DOS PROCESOS, NO UNO
@@ -82,7 +99,7 @@ armarlo por partes.
 --------------------------------------------------------------------------------
   2.1 SERVICIO DE VISION (Python)
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\vision-service
+     cd %RUTA_DEL_PROYECTO%\vision-service
      python -m venv venv
      .\venv\Scripts\Activate.ps1
      pip install -r requirements.txt
@@ -100,12 +117,12 @@ armarlo por partes.
 
   2.2 BACKEND (Node)
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\backend
+     cd %RUTA_DEL_PROYECTO%\backend
      npm install
 
   2.3 FRONTEND (solo si vas a usar la web)
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\frontend
+     cd %RUTA_DEL_PROYECTO%\frontend
      npm install
 
 
@@ -235,12 +252,12 @@ Dos ventanas de PowerShell, en este orden.
 
   VENTANA 1 - SERVICIO DE VISION (siempre en local; solo lo llama el backend)
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\vision-service
+     cd %RUTA_DEL_PROYECTO%\vision-service
      .\venv\Scripts\python.exe -m uvicorn service:app --port 8001
 
   VENTANA 2 - BACKEND
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\backend
+     cd %RUTA_DEL_PROYECTO%\backend
      npm run dev
 
   A diferencia de uvicorn, Express escucha en TODAS las interfaces por defecto,
@@ -250,7 +267,7 @@ Dos ventanas de PowerShell, en este orden.
 
   VENTANA 3 - FRONTEND (opcional, solo para la web)
 
-     cd C:\Users\mosqu\Downloads\Proyecto_Grado\tangram-ia\frontend
+     cd %RUTA_DEL_PROYECTO%\frontend
      npm run dev                       ->  http://localhost:5173
 
 
