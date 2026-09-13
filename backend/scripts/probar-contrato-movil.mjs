@@ -212,11 +212,25 @@ if (fila) for (const [ruta, tipo] of [
   ["time_seconds", "number"], ["created_at", "string"],
 ]) campo(fila, ruta, tipo);
 
+/**
+ * Las estadísticas de rendimiento ya no son suyas: son del docente.
+ *
+ * Aquí se comprobaba que un estudiante podía pedir sus propias cifras y recibía
+ * un 200. Ahora la regla del sistema es que el progreso de las actividades se
+ * mira desde el panel del docente y desde ningún otro sitio, así que lo correcto
+ * en esta llamada es un 403 —y comprobarlo es lo que impide que la restricción
+ * se deshaga sin que nadie se entere—.
+ *
+ * Atención al montar la app móvil sobre este contrato: `CatalogueScreen` todavía
+ * llama a esta ruta para su barra de progreso. No se rompe —la envuelve en un
+ * `.catch()` y se queda sin la cifra—, pero esa barra hay que retirarla cuando
+ * se lleve el cambio al teléfono. Lo que el catálogo sí conserva es el historial
+ * propio de aquí arriba, que es de donde salen las figuras ya logradas.
+ */
 const estad = await pedir(`/students/${alumno}/stats`, { headers: auth(token) });
-comprobar("sus estadísticas responden", estad.code === 200, `HTTP ${estad.code}`);
-for (const [ruta, tipo] of [
-  ["total", "number"], ["passed", "number"], ["avg_iou", "number"], ["accuracy", "number"],
-]) campo(estad.cuerpo, ruta, tipo);
+comprobar("sus estadísticas quedan reservadas al docente", estad.code === 403,
+          `HTTP ${estad.code}`);
+campo(estad.cuerpo, "detail", "string");
 
 // ─── 6. Errores que la app sabe interpretar ─────────────────────────────────
 // Todos tienen que llegar como {detail}: es la única forma que la app pinta.

@@ -1,4 +1,4 @@
-import { getApiUrl } from "./config";
+import { candidatasApiUrl, getApiUrl, setApiUrl } from "./config";
 import {
   actualizarAcceso, cabeceraAuth, cerrarSesion, iniciarSesion,
   obtenerAcceso, obtenerRefresco, sesionExpirada,
@@ -52,6 +52,14 @@ const LOGIN_TIMEOUT_MS = 12_000;
  */
 const FALLO_INMEDIATO_MS = 1200;
 
+/**
+ * El teléfono no consiguió hablar con el servidor: ni WiFi, ni backend, ni la
+ * dirección correcta. Es un tipo propio y no un `Error` cualquiera porque el
+ * ingreso reacciona a él —busca el servidor en las otras direcciones conocidas
+ * y reintenta— y no puede hacer eso con un «credenciales incorrectas».
+ */
+export class ErrorDeRed extends Error {}
+
 /** FastAPI devuelve `detail` como texto o, en un 422, como lista de objetos. */
 function detailToMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
@@ -67,19 +75,19 @@ function detailToMessage(detail: unknown, fallback: string): string {
  * instante en que se lanzó la petición: cuánto tardó en fallar es el dato que
  * separa las dos averías (ver `FALLO_INMEDIATO_MS`).
  */
-function errorDeRed(e: unknown, inicio: number): Error {
+function errorDeRed(e: unknown, inicio: number): ErrorDeRed {
   if (e instanceof Error && e.name === "AbortError") {
-    return new Error("El servidor tardó demasiado en responder. Inténtalo otra vez.");
+    return new ErrorDeRed("El servidor tardó demasiado en responder. Inténtalo otra vez.");
   }
   const url = getApiUrl();
   if (Date.now() - inicio < FALLO_INMEDIATO_MS) {
-    return new Error(
+    return new ErrorDeRed(
       `El teléfono no llegó ni a intentarlo con ${url}: el fallo volvió al ` +
       `instante. Casi siempre es el WiFi apagado, o que el backend no esté ` +
       `corriendo en esa dirección.`
     );
   }
-  return new Error(
+  return new ErrorDeRed(
     `No se pudo conectar con el servidor (${url}). Revisa la dirección en ` +
     `Ajustes, que estés en el mismo WiFi que la PC y que el backend esté corriendo.`
   );
@@ -121,24 +129,12 @@ async function refrescarToken(): Promise<boolean> {
 interface OpcionesFetch {
   /** Es la repetición de una petición tras renovar el token. */
   reintento?: boolean;
-  /**
-   * En esta ruta, un 401 significa «la clave que acabas de escribir no es esa»,
-   * no «tu sesión caducó».
-   *
-   * Lo pide `/password`: el servidor rechaza con 401 la contraseña actual
-   * equivocada, y con el trato de siempre —cerrar la sesión ante cualquier 401—
-   * un niño que se equivocaba de dígito acababa **expulsado al ingreso**, sin
-   * llegar a ver el mensaje, porque su pantalla se desmontaba con él. Se sigue
-   * intentando renovar el token, que es inofensivo; lo que no se hace es dar la
-   * sesión por muerta.
-   */
-  el401EsDeLaClave?: boolean;
 }
 
 async function apiFetch<T>(
   path: string, options?: RequestInit, opciones: OpcionesFetch = {},
 ): Promise<T> {
-  const { reintento = false, el401EsDeLaClave = false } = opciones;
+  const { reintento = false } = opciones;
   const controller = new AbortController();
   // El tope tiene que cubrir también la lectura del cuerpo, no solo abrir la
   // conexión: un servidor que manda las cabeceras y se cuelga a mitad del JSON
@@ -168,11 +164,11 @@ async function apiFetch<T>(
       if (await refrescarToken()) {
         return await apiFetch<T>(path, options, { ...opciones, reintento: true });
       }
-      if (!el401EsDeLaClave) sesionExpirada();
+      sesionExpirada();
     }
 
     if (!res.ok) {
-      if (res.status === 401 && !el401EsDeLaClave) sesionExpirada();
+      if (res.status === 401) sesionExpirada();
       const err = await res.json().catch(() => null);
       throw new Error(detailToMessage(err?.detail, `El servidor respondió ${res.status}`));
     }
@@ -199,6 +195,8 @@ export interface LoginResponse {
   role:          string;
   name:          string;
   id:            number;
+  /** La cuenta todavía tiene la clave temporal del docente. */
+  must_change_password?: boolean;
 }
 
 /**
@@ -227,7 +225,7 @@ export async function login(email: string, password: string): Promise<User> {
       });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
-        throw new Error(
+        throw new ErrorDeRed(
           `El servidor (${getApiUrl()}) no contestó. Comprueba la dirección en ` +
           `Ajustes: si apunta a una máquina que no es, el intento se queda ` +
           `esperando una respuesta que no llega.`
@@ -245,6 +243,10 @@ export async function login(email: string, password: string): Promise<User> {
       name:  data.name,
       email,
       role:  data.role as User["role"],
+      // `=== true` y no un truthy: un backend viejo no manda el campo, y
+      // `undefined` tiene que leerse como «no hay nada que cambiar» en vez de
+      // dejar a toda la clase atrapada en la pantalla de la clave.
+      must_change_password: data.must_change_password === true,
     };
     await iniciarSesion(data.access_token, data.refresh_token, usuario);
     return usuario;
@@ -296,6 +298,16 @@ export async function logout(): Promise<void> {
  * tiene que llevar al estudiante de vuelta al ingreso: cualquier otra petición
  * respondería 401.
  */
+/**
+ * Una clave actual equivocada llega como **422**, no como 401.
+ *
+ * Es lo que permite que esta llamada no necesite ningún trato especial: el 401
+ * de aquí significa lo mismo que en cualquier otra ruta —la sesión ya no vale—
+ * y se atiende igual, cerrándola. Cuando el servidor devolvía 401 para las dos
+ * cosas, distinguirlas obligaba a desatender todos los 401 de esta ruta, y un
+ * niño al que le acababan de regenerar la clave —lo que revoca sus sesiones—
+ * se quedaba dando vueltas en la pantalla de la clave sin salida posible.
+ */
 export async function changePassword(actual: string, nueva: string): Promise<void> {
   await apiFetch(
     "/password",
@@ -303,9 +315,6 @@ export async function changePassword(actual: string, nueva: string): Promise<voi
       method: "POST",
       body: JSON.stringify({ current_password: actual, new_password: nueva }),
     },
-    // Aquí el 401 es «esa no es tu clave de ahora», y no puede acabar echando al
-    // estudiante al ingreso: ver `el401EsDeLaClave`.
-    { el401EsDeLaClave: true },
   );
   await cerrarSesion();
 }
@@ -427,11 +436,15 @@ export interface HealthStatus {
 
 /**
  * Prueba la conexión contra una URL concreta (sin guardarla todavía).
- * Lo usa la pantalla de ajustes para validar antes de aceptar la dirección.
+ * Lo usa la pantalla de ajustes para validar antes de aceptar la dirección, y
+ * también el sondeo de `buscarServidor`, que pide un tope más corto: ahí se
+ * prueban varias direcciones a la vez y la mayoría no van a contestar.
  */
-export async function testConnection(url: string): Promise<HealthStatus> {
+export async function testConnection(
+  url: string, timeoutMs = 6000,
+): Promise<HealthStatus> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${url}/health`, { signal: controller.signal });
     // Un 404 o un 500 significan que el servidor SÍ está ahí: ese diagnóstico
@@ -452,4 +465,94 @@ export async function testConnection(url: string): Promise<HealthStatus> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ─── Búsqueda automática del servidor ──────────────────────────────────────────
+/**
+ * Tope para la dirección que ya se está usando.
+ *
+ * Es la apuesta buena: si el servidor está ahí contesta en milisegundos, y lo
+ * único que se espera es descubrir que **no** está para pasar a buscar.
+ */
+const SONDEO_ACTUAL_MS = 2500;
+
+/**
+ * Tope del sondeo de las demás. Va más largo porque estas sí pueden ser
+ * direcciones de otra red: una IP enrutable pero de una máquina que no está
+ * descarta el paquete sin contestar, y el intento se queda esperando.
+ */
+const SONDEO_MS = 4000;
+
+/** Lo que devuelve la búsqueda: dónde está el servidor y si hubo que mudarse. */
+export interface Hallazgo {
+  url:    string;
+  health: HealthStatus;
+  /** `true` si el servidor apareció en una dirección distinta a la que había. */
+  cambio: boolean;
+}
+
+/**
+ * Lanza todos los sondeos a la vez y devuelve el primero que conteste.
+ *
+ * En paralelo y no en fila: en secuencia, con cuatro direcciones muertas
+ * delante, encontrar la buena costaría cuatro esperas seguidas —dieciséis
+ * segundos de arranque— cuando el aparato puede preguntarlo todo de golpe.
+ * Devuelve `null` cuando ninguna contesta.
+ */
+function primeraQueResponda(urls: string[]): Promise<Hallazgo | null> {
+  return new Promise(resolve => {
+    let pendientes = urls.length;
+    if (pendientes === 0) { resolve(null); return; }
+    let listo = false;
+    for (const url of urls) {
+      testConnection(url, SONDEO_MS)
+        .then(health => {
+          if (listo) return;
+          listo = true;
+          resolve({ url, health, cambio: true });
+        })
+        .catch(() => { /* esa dirección no era */ })
+        .then(() => {
+          pendientes -= 1;
+          if (pendientes === 0 && !listo) resolve(null);
+        });
+    }
+  });
+}
+
+/**
+ * Averigua dónde está el backend y se queda con esa dirección.
+ *
+ * Es lo que hace que cambiar de red no pida nada: al arrancar la app se prueba
+ * la dirección guardada y, si no contesta, se sondean todas las conocidas —las
+ * horneadas en `app.json` y las que se hayan escrito a mano alguna vez, ver
+ * `candidatasApiUrl`—. La que responda `/health` se guarda como la de ahora, y
+ * el estudiante entra sin enterarse de que se mudó de aula.
+ *
+ * Solo cuenta como encontrado lo que responde `/health` **correctamente**: un
+ * 404 en esa ruta significa que ahí hay otro servidor cualquiera, no este.
+ *
+ * Devuelve `null` si nadie contesta: entonces sí hay que escribir la dirección
+ * a mano en Ajustes, y `null` es lo que le dice a la pantalla que lo pida.
+ */
+export async function buscarServidor(): Promise<Hallazgo | null> {
+  const candidatas = candidatasApiUrl();
+  const actual = candidatas[0] ?? "";
+
+  if (actual !== "") {
+    try {
+      const health = await testConnection(actual, SONDEO_ACTUAL_MS);
+      // Se guarda aunque no haya cambiado nada: puede ser la de `app.json` en
+      // el primer arranque, y así queda también en el historial que se sondea.
+      await setApiUrl(actual);
+      return { url: actual, health, cambio: false };
+    } catch {
+      // no está ahí: se busca en las demás
+    }
+  }
+
+  const hallado = await primeraQueResponda(candidatas.slice(1));
+  if (!hallado) return null;
+  await setApiUrl(hallado.url);
+  return hallado;
 }

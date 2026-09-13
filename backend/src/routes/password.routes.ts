@@ -62,8 +62,22 @@ rutasClave.post("/password", exigirSesion, async (req, res) => {
   const usuario = await buscarPorId(identidad.id);
   if (!usuario) throw noAutorizado("Tu sesión ya no es válida.");
 
+  /**
+   * Es un 422 y no un 401, y la diferencia no es de estilo.
+   *
+   * Un 401 en esta API significa «tu sesión ya no vale, vuelve a entrar», y los
+   * clientes lo tratan así: cierran la sesión y devuelven al ingreso. Usarlo
+   * también para «te equivocaste de dígito» obligaba a la app a distinguir dos
+   * cosas indistinguibles desde fuera, y la única forma de hacerlo era dejar de
+   * atender **todos** los 401 de esta ruta. Con eso, un niño al que el docente
+   * le acababa de regenerar la clave —lo que revoca sus sesiones— se quedaba
+   * atrapado: cada intento devolvía un 401 de sesión que la app le enseñaba
+   * como si hubiera tecleado mal, en bucle y sin salida.
+   *
+   * Con un 422 aquí, el 401 vuelve a significar una sola cosa en toda la API.
+   */
   if (!(await bcrypt.compare(current_password, usuario.password_hash))) {
-    throw noAutorizado("La contraseña actual no es correcta");
+    throw new HttpError(422, "La contraseña actual no es correcta");
   }
 
   // Cambiarla por la misma no cambia nada y, sin embargo, cerraría la sesión en
@@ -72,8 +86,22 @@ rutasClave.post("/password", exigirSesion, async (req, res) => {
     throw new HttpError(422, "La contraseña nueva tiene que ser distinta de la actual");
   }
 
-  await cambiarClave(usuario.id, new_password);
+  /**
+   * Se revoca **antes** de cambiar, y no después.
+   *
+   * Son dos `UPDATE` sueltos, así que hay que elegir qué queda si el segundo
+   * falla. Cambiando primero, un fallo al revocar deja la clave nueva puesta y
+   * los tokens viejos vivos: exactamente el estado que este endpoint existe
+   * para evitar. Revocando primero, un fallo al cambiar deja al usuario fuera
+   * de sus dispositivos con su clave de siempre, que es un estorbo y no un
+   * agujero: vuelve a entrar y lo intenta otra vez.
+   *
+   * Y `cambiarClave` sin el tercer parámetro deja `must_change_password` en 0:
+   * la clave temporal deja de serlo en el mismo `UPDATE` que la sustituye, sin
+   * una segunda consulta que pudiera quedarse a medias.
+   */
   await revocarSesiones(usuario.id);
+  await cambiarClave(usuario.id, new_password);
 
   res.json({
     ok: true,

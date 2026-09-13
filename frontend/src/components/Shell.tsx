@@ -4,7 +4,9 @@ import { ROLES } from "../constants";
 import { BRUT, T } from "../theme/brut";
 import GameScreen from "./GameScreen";
 import Logo from "./Logo";
+import MaterialsButton from "./MaterialsPanel";
 import StudentHome from "./StudentHome";
+import StudentsAdmin from "./StudentsAdmin";
 import TeacherDashboard from "./TeacherDashboard";
 import type { Figure, User } from "../types";
 
@@ -15,7 +17,23 @@ import type { Figure, User } from "../types";
  * degradado: en este estilo lo que divide es la línea.
  */
 export default function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const [view,      setView]      = useState<"home" | "game" | "dashboard">(user.role === ROLES.TEACHER ? "dashboard" : "home");
+  /**
+   * El rol se resuelve una vez y decide **qué se pinta**, no solo qué botones
+   * hay. Antes las pestañas del docente se le ocultaban al estudiante y el
+   * `main` renderizaba la vista que dijera `view`, sin volver a mirar quién era:
+   * bastaba con que ese estado llegara a "dashboard" por cualquier vía para que
+   * el panel del curso se montara en la pantalla de un niño. Esconder la puerta
+   * no es cerrarla; esto la cierra.
+   *
+   * Lo de verdad importante sigue estando en el servidor —`/sessions` y
+   * `/students` responden 403 a un estudiante—, así que esto no es la barrera,
+   * es no pedir datos que no van a llegar.
+   */
+  const esDocente = user.role === ROLES.TEACHER;
+
+  const [view,      setView]      = useState<"home" | "game" | "dashboard" | "students">(
+    esDocente ? "dashboard" : "home",
+  );
   const [activeFig, setActiveFig] = useState<Figure | null>(null);
   const [figures,      setFigures]      = useState<Figure[]>([]);
   const [figuresError, setFiguresError] = useState("");
@@ -29,8 +47,15 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
     return () => { cancelled = true; };
   }, []);
 
-  const tabs = user.role === ROLES.TEACHER
-    ? [{ id: "dashboard" as const, label: "Dashboard" }]
+  // El docente tiene dos vistas y no una: el registro de intentos responde
+  // «cómo va el curso», y la gestión de estudiantes «quién está en el curso».
+  // Son dos preguntas distintas y mezclarlas en una sola tabla dejaba el alta
+  // de cuentas sin ningún sitio donde vivir.
+  const tabs = esDocente
+    ? [
+        { id: "dashboard" as const, label: "Intentos" },
+        { id: "students"  as const, label: "Estudiantes" },
+      ]
     : [{ id: "home" as const, label: "Mis figuras" }];
 
   function handleSelectFigure(fig: Figure) {
@@ -58,7 +83,7 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
           <span style={{ ...T.title(16), letterSpacing: -0.3, textTransform: "uppercase" }}>
             Tangram IA
           </span>
-          {user.role === ROLES.TEACHER && (
+          {esDocente && (
             <span style={{
               ...T.eyebrow(BRUT.ink), fontSize: 10, padding: "5px 11px",
               ...BRUT.subtle(BRUT.info),
@@ -81,6 +106,9 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Alcanzable desde cualquier vista, también con una figura abierta:
+              es cuando la foto ya salió mal y hay que saber por qué. */}
+          <MaterialsButton variant="nav" />
           <div style={{
             width: 38, height: 38, display: "grid", placeItems: "center",
             fontSize: 13, fontWeight: 900, color: BRUT.ink,
@@ -100,7 +128,8 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
                                               figuresError={figuresError}
                                               onSelectFigure={handleSelectFigure} />}
         {view === "game"      && activeFig && <GameScreen user={user} figure={activeFig} onExit={() => setView("home")} />}
-        {view === "dashboard" && <TeacherDashboard figures={figures} />}
+        {view === "dashboard" && esDocente && <TeacherDashboard figures={figures} />}
+        {view === "students"  && esDocente && <StudentsAdmin />}
       </main>
     </div>
   );

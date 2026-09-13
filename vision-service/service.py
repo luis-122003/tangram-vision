@@ -255,6 +255,15 @@ class AnalyzeResponse(BaseModel):
     confidence:      float
     iou_score:       float
     match:           bool
+    # Cuánto Tangram se alcanzó a ver, y si alcanzó para calificar. Tienen que
+    # estar declarados aquí: `response_model` descarta cualquier clave que el
+    # modelo no declare, así que sin estas dos líneas `construir_respuesta` los
+    # calcula y FastAPI los tira, y el cliente nunca puede decir «no pude leer
+    # la foto» —pinta las comprobaciones que salen «bien» por vacuidad—.
+    # El valor por defecto es el de una detección completa, para que una
+    # respuesta sin estos campos no se lea como foto ilegible.
+    coverage:        float = 1.0
+    detection_ok:    bool = True
     # Acierto mínimo exigido. Viaja en la respuesta para que la marca de la
     # barra en la app sea siempre la del servidor, aunque el umbral se cambie
     # por variable de entorno.
@@ -324,7 +333,14 @@ async def analyze(req: AnalyzeRequest):
             det = yolo_model.predict(source=imagen, conf=YOLO_CONF,
                                      imgsz=YOLO_IMGSZ, max_det=30, verbose=False)
             piezas, avs = pipeline.desde_yolo(det[0]) if det else ([], [])
-            return pipeline.descartar_duplicados(piezas), avs
+            piezas = pipeline.descartar_duplicados(piezas)
+            # `descartar_duplicados` quita las cajas que se pisan, pero no ve los
+            # dos fallos que el detector comete con las fichas de cuatro lados:
+            # parte el romboide por su diagonal en dos triangulos pequenos, y
+            # cuando si acierta el cuadrilatero duda entre cuadrado y romboide
+            # con confianzas de 0.48. Medido sobre las 114 fotos reales, esto
+            # lleva el inventario correcto de 0 a 98 de 114.
+            return tv.reparar_cuadrilateros(piezas), avs
 
         recorte, recortada, avisos = pipeline.recortar(img, req.crop)
         detecciones, avs = detectar(recorte)
@@ -377,6 +393,11 @@ async def health():
     return {
         "status":      "ok",
         "yolo_loaded": yolo_model is not None,
+        # Cual archivo, no solo si hay alguno. En models/ conviven el detector
+        # nuevo y el anterior, y los dos son yolov8s-seg: `models_loaded` dice
+        # lo mismo para ambos y `yolo_loaded` sale True igual. Arrancar con el
+        # que no es no produce ningun aviso, y sus cifras son verosimiles.
+        "yolo_weights": YOLO_WEIGHTS.name if yolo_model is not None else None,
         # El validador es geometría pura: no tiene pesos que cargar y por eso
         # siempre está listo. Se informa igual para que la pantalla de ajustes
         # de la app móvil muestre las dos etapas del pipeline.

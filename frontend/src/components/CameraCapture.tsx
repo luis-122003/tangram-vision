@@ -18,6 +18,31 @@ import { BRUT, T } from "../theme/brut";
  * pero una sombra `inset` se pinta debajo del contenido, y el vídeo cubría todo
  * el área. Con la cámara encendida, ese relieve no se veía.
  */
+/**
+ * Proporción del visor. La usan **el estilo y la captura**, y por eso es una
+ * constante y no un literal escrito dos veces: si las dos cifras se separan, la
+ * foto deja de coincidir con lo que se vio y el fallo es invisible en el código.
+ */
+const ASPECTO = 4 / 3;
+
+/**
+ * Qué parte del fotograma se está viendo de verdad.
+ *
+ * El vídeo se pinta con `object-fit: cover`, que llena el marco recortando lo
+ * que sobra por los lados o por arriba y abajo. Pero `drawImage(video, 0, 0)`
+ * copia el fotograma **entero**, incluido lo que el marco había recortado: la
+ * foto que se analizaba llevaba mesa, bordes y objetos que el usuario nunca vio
+ * dentro del cuadro. Esto deshace ese recorte para copiar solo lo visible.
+ */
+function regionVisible(vw: number, vh: number) {
+  if (vw / vh > ASPECTO) {          // el fotograma es más ancho: se recorta a los lados
+    const w = vh * ASPECTO;
+    return { sx: (vw - w) / 2, sy: 0, sw: w, sh: vh };
+  }
+  const h = vw / ASPECTO;           // más alto: se recorta arriba y abajo
+  return { sx: 0, sy: (vh - h) / 2, sw: vw, sh: h };
+}
+
 export default function CameraCapture({ onCapture }: {
   onCapture: (imageBase64: string) => void;
 }) {
@@ -62,9 +87,14 @@ export default function CameraCapture({ onCapture }: {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || !video.videoWidth) return;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const { sx, sy, sw, sh } = regionVisible(video.videoWidth, video.videoHeight);
+    canvas.width = Math.round(sw);
+    canvas.height = Math.round(sh);
+    // Se copia solo el trozo que el marco dejaba ver, a tamaño real: lo que se
+    // analiza pasa a ser exactamente lo que había dentro del cuadro.
+    canvas.getContext("2d")?.drawImage(
+      video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height,
+    );
     onCapture(canvas.toDataURL("image/jpeg", 0.9));
   }
 
@@ -82,7 +112,7 @@ export default function CameraCapture({ onCapture }: {
       {/* La sombra vive aquí; el marco de dentro es el que clipa el vídeo. */}
       <div style={{ boxShadow: `6px 6px 0 ${BRUT.ink}` }}>
         <div style={{
-          position: "relative", width: "100%", aspectRatio: "4 / 3",
+          position: "relative", width: "100%", aspectRatio: `${ASPECTO}`,
           overflow: "hidden", background: BRUT.well,
           border: `${BRUT.border}px solid ${BRUT.ink}`,
         }}>

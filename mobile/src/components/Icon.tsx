@@ -14,7 +14,7 @@ import { C } from "../theme";
  */
 export type IconName =
   | "back" | "logout" | "camera" | "clock" | "check" | "bang"
-  | "layers" | "bolt" | "refresh" | "gear" | "backspace" | "signal";
+  | "layers" | "bolt" | "refresh" | "gear" | "backspace" | "signal" | "kit";
 
 const PATHS: Record<IconName, { d: string[]; width?: number; dots?: [number, number, number][] }> = {
   back:      { d: ["M15 5l-7 7 7 7"], width: 3 },
@@ -35,6 +35,9 @@ const PATHS: Record<IconName, { d: string[]; width?: number; dots?: [number, num
   },
   backspace: { d: ["M9 5h12v14H9L2 12z", "M13 9.5l5 5M18 9.5l-5 5"] },
   signal:    { d: ["M4 12a8 8 0 0 1 16 0", "M7.5 15a4.6 4.6 0 0 1 9 0"], dots: [[12, 19, 1.4]] },
+  // Caja de herramientas: el asa dice «esto se lleva encima», que es lo que
+  // distingue los materiales de una pantalla de ayuda.
+  kit:       { d: ["M3 9h18v11H3z", "M9 9V6h6v3", "M9.5 14h5"] },
 };
 
 export default function Icon({ name, size = 22, color = C.ink, strokeWidth }: {

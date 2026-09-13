@@ -11,7 +11,8 @@ El docente sigue usando la versión web (`../frontend`).
 
 ## Pantallas
 
-0. **Servidor** — dirección del backend, editable y con prueba de conexión
+0. **Servidor** — atajos por red, búsqueda automática del backend y prueba de
+   conexión (la dirección también se puede escribir a mano)
    (`/health`: base de datos, detector de fichas y umbral de aprobación). Con la
    sesión abierta ofrece además **cambiar la clave**; desde el ingreso no, que es
    donde no hay ninguna cuenta a la que cambiársela.
@@ -26,6 +27,16 @@ El docente sigue usando la versión web (`../frontend`).
    marca en las figuras ya logradas (se deducen de `/students/{id}/sessions`).
    Vuelve a pedir sus datos cada vez que se sale de una figura, que es lo que
    pone al día el sello y el contador del intento recién hecho.
+
+   > **Pendiente.** `/students/{id}/stats` pasó a ser **solo del docente**: el
+   > progreso de las actividades se mira desde su panel y desde ningún otro
+   > sitio. La web del estudiante ya perdió sus cifras; aquí la llamada sigue
+   > hecha y ahora responde 403. No rompe nada —va envuelta en un `.catch()` y
+   > el catálogo se queda sin ese contador—, pero las tres cifras y la pantalla
+   > **Mis intentos** hay que retirarlas cuando se lleve el cambio al teléfono.
+   > La marca de las figuras logradas **sí se queda**: sale de
+   > `/students/{id}/sessions`, que sigue abierta al propio estudiante porque es
+   > parte de jugar y no una medida de su desempeño.
 2b. **Mis intentos** — los últimos 20 de `/students/{id}/sessions`: qué figura,
    si se logró, cuánto se pareció y cuánto tardó. Las tres cifras del catálogo
    son una cuenta; esto es el recuerdo.
@@ -131,19 +142,46 @@ En el teléfono, `localhost` es el propio teléfono, **no tu PC**. Hay que usar
 la IP de tu computador en la red WiFi. Averígualа en Windows con `ipconfig`
 (campo **Dirección IPv4** del adaptador Wi-Fi, algo como `192.168.1.10`).
 
-**No hace falta recompilar para cambiarla.** En la pantalla de ingreso, abajo,
-toca **Servidor → Cambiar**, escribe la dirección y usa **Probar conexión** para
-confirmar que responde. Queda guardada en el teléfono.
+**Casi nunca hay que tocar nada, y nunca hay que recompilar.** La app se sabe
+de memoria las direcciones donde ya encontró el backend —las de `app.json` más
+las que se hayan escrito a mano alguna vez, guardadas en el teléfono— y **al
+arrancar las prueba todas**: usa la última que funcionó y, si esa no contesta,
+sondea las demás en paralelo y se queda con la que responda `/health`. Llegar al
+aula con la IP de casa guardada ya no pide nada: se abre la app y entra.
 
-El valor de `app.json` solo es el que aparece la primera vez que se abre la app:
+Cuando hace falta intervenir, todo está en **Servidor** (abajo en la pantalla de
+ingreso, o el engranaje dentro de la app):
+
+- **Mis redes** — un toque en «Universidad», «Casa» o cualquier dirección
+  guardada: la pone y la prueba de una vez. Es lo que se usa si se cambió de red
+  con la app ya abierta.
+- **Buscar el servidor en la red** — repite el sondeo del arranque a mano.
+- **Escribirla a mano** — solo cuando la IP es nueva. Al guardarla queda en
+  «Mis redes» y la app la volverá a probar sola de ahí en adelante, sin
+  recompilar.
+
+Las direcciones horneadas en el APK están en `app.json`, y es el único sitio del
+proyecto donde aparece una IP:
 
 ```json
-"extra": { "apiUrl": "http://192.168.1.10:8000" }
+"extra": {
+  "apiUrl": "http://192.168.1.10:8000",
+  "apiUrls": [
+    { "etiqueta": "Universidad", "url": "http://192.168.1.10:8000" },
+    { "etiqueta": "Universidad (anterior)", "url": "http://192.168.1.11:8000" }
+  ]
+}
 ```
+
+Añadir una red al APK es añadir una entrada a esa lista; nada más en el código
+depende de ella. Las direcciones se limpian al leerlas (espacios de más, barra
+final, `http://` ausente), así que un `"http:// 192.168.1.10:8000"` mal
+teclado no rompe la app.
 
 > Esto es clave el día de la sustentación: si la red de la universidad bloquea
 > la comunicación entre dispositivos, conecta el portátil al **hotspot del
-> celular**, saca la IP nueva con `ipconfig` y escríbela en Ajustes.
+> celular**, saca la IP nueva con `ipconfig` y escríbela en Ajustes; queda
+> guardada y a partir de ahí la app la reconoce sola.
 
 ## Paso 2 — Arrancar los servicios escuchando en la red
 
@@ -237,8 +275,11 @@ El perfil `preview` genera APK directo. Créalo en `eas.json` si no existe:
 - **Cámara**: la app usa `expo-camera` con permiso nativo, así que no tiene la
   restricción de HTTPS que sí afecta a los navegadores. Funciona con HTTP
   en red local (`usesCleartextTraffic` está habilitado en `app.json`).
-- **Si cambias de red WiFi** cambia la IP de tu PC, pero no hay que recompilar:
-  se actualiza desde la pantalla de Ajustes dentro de la app.
+- **Si cambias de red WiFi** cambia la IP de tu PC, pero no hay que recompilar
+  ni normalmente tocar nada: la app sondea al arrancar las direcciones que
+  conoce y adopta la que conteste (`buscarServidor` en `src/api/client.ts`, y la
+  lista en `src/api/config.ts`). Si el ingreso falla por red, vuelve a buscar y
+  reintenta una vez antes de dar el error.
 - **HTTP en claro**: Android 9+ bloquea el tráfico sin cifrar por defecto. El
   plugin `expo-build-properties` lo habilita (`usesCleartextTraffic`), que es
   lo que permite hablar con el backend por `http://` en la red local.

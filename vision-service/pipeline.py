@@ -269,6 +269,7 @@ def _sin_fichas(figura: dict) -> tv.ResultadoValidacion:
         [],
         None,
         avisos=["No se detectó ninguna ficha en la foto."],
+        cobertura=0.0,
     )
 
 
@@ -535,6 +536,12 @@ def construir_respuesta(
         "confidence":      round(float(confianza), 3),
         "iou_score":       round(float(resultado.puntaje), 3),
         "match":           bool(resultado.es_correcta),
+        # Cuánto Tangram se alcanzó a ver, y si alcanzó para calificar. Con
+        # `detection_ok` en false, el resto del diagnóstico no se comprobó:
+        # el cliente tiene que decir que la foto no se pudo leer, no dar por
+        # buenas las comprobaciones que salen «bien» por vacuidad.
+        "coverage":        round(float(resultado.cobertura), 3),
+        "detection_ok":    bool(resultado.deteccion_suficiente),
         "match_threshold": tv.UMBRAL_IOU_CORRECTA,
         "pieces_used":     piezas["total"],
         "pieces":          piezas,

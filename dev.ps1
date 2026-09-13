@@ -133,6 +133,15 @@ if (Esperar "http://127.0.0.1:8000/health" "backend             http://localhost
     if ($salud.yolo_loaded) { $textoDet = "YOLOv8s-seg cargado"; $colorDet = "Green" }
     else                    { $textoDet = "NO CARGADO";          $colorDet = "Red"   }
     Write-Host "  Deteccion fichas: $textoDet" -ForegroundColor $colorDet
+    # Qué archivo de pesos se cargó, preguntándoselo al servicio de visión y no
+    # al .env: lo que importa es lo que está corriendo, que puede no ser lo que
+    # dice el archivo si el servicio ya estaba levantado de antes.
+    try {
+        $vision = Invoke-RestMethod -Uri "http://127.0.0.1:8001/health" -TimeoutSec 2
+        if ($vision.yolo_weights) {
+            Write-Host "  Pesos cargados  : $($vision.yolo_weights)"
+        }
+    } catch { }
     Write-Host "  Comparacion     : geometrica, sin pesos (no hay modelo que activar)"
     if (-not $salud.yolo_loaded) {
         Write-Host ""

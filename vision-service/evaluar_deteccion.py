@@ -170,8 +170,20 @@ def main() -> None:
         print(f"\n   diferencia: IoU {d:+.3f}   fichas {df:+.2f}")
 
     if args.csv:
-        filas = ["imagen,iou,fichas"]
-        filas += [f"{n},{v:.4f},{k}" for n, v, k in primero["por_imagen"]]
+        # Con --comparar hay dos modelos y el CSV tiene que llevar los dos: uno
+        # solo obliga a volver a correr la medida entera para tener el otro, que
+        # son otros dos minutos de inferencia por 114 fotos.
+        a = Path(args.pesos).stem
+        if segundo is None:
+            filas = ["imagen,iou,fichas"]
+            filas += [f"{n},{v:.4f},{k}" for n, v, k in primero["por_imagen"]]
+        else:
+            b = Path(args.comparar).stem
+            filas = [f"imagen,iou_{a},fichas_{a},iou_{b},fichas_{b}"]
+            der = {n: (v, k) for n, v, k in segundo["por_imagen"]}
+            for n, v, k in primero["por_imagen"]:
+                v2, k2 = der.get(n, (float("nan"), 0))
+                filas.append(f"{n},{v:.4f},{k},{v2:.4f},{k2}")
         Path(args.csv).write_text("\n".join(filas) + "\n", encoding="utf-8")
         print(f"\nDetalle por imagen en {args.csv}")
 

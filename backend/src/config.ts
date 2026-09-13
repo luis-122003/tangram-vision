@@ -160,6 +160,37 @@ export const config = {
   },
 
   /**
+   * Supabase Storage: dónde quedan las fotos que manda el estudiante.
+   *
+   * Es **opcional a propósito**. Sin `SUPABASE_URL` el sistema funciona
+   * exactamente como antes —se analiza la foto y se descarta—, que es lo que
+   * permite seguir trabajando sin credenciales y, sobre todo, que un problema
+   * con el almacén no deje a un niño sin poder jugar. `activo` es la condición
+   * que miran los dos sitios que suben o firman.
+   *
+   * La clave es la `service_role`, que **salta todas las políticas RLS**: por
+   * eso vive solo aquí y no sale nunca del servidor. Ningún cliente habla con
+   * Supabase, igual que ninguno habla con MySQL.
+   */
+  storage: (() => {
+    const url = (process.env.SUPABASE_URL ?? "").trim().replace(/\/+$/, "");
+    const clave = (process.env.SUPABASE_SERVICE_KEY ?? "").trim();
+    return {
+      url,
+      clave,
+      bucket: (process.env.SUPABASE_BUCKET ?? "intentos").trim(),
+      /**
+       * Cuánto vive la URL firmada con la que el docente ve una foto. Un minuto
+       * basta para que el navegador la cargue y es poco para que el enlace, si
+       * se copia, siga sirviendo a nadie.
+       */
+      firmaSegundos: entero("SUPABASE_SIGN_TTL", 60),
+      /** Hay dónde guardar y con qué credencial. Si no, no se sube nada. */
+      activo: url !== "" && clave !== "",
+    };
+  })(),
+
+  /**
    * Catálogo semilla. Vive en el servicio de visión porque allí lo usan
    * `--autotest` y `--calibrar` con su ruta por defecto; aquí solo se lee una
    * vez, la primera, para sembrar MySQL.

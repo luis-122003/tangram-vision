@@ -105,6 +105,8 @@ async function crearTablas(): Promise<void> {
         name_enc      TEXT NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role          ENUM('student','teacher') NOT NULL,
+        -- 1 mientras la cuenta conserve la clave temporal que le dio el docente.
+        must_change_password TINYINT(1) NOT NULL DEFAULT 0,
         token_version INT NOT NULL DEFAULT 0,
         created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -223,6 +225,48 @@ async function migrarDatosPersonales(): Promise<void> {
   }
 }
 
+/**
+ * Columnas que tienen que existir aunque la tabla se creara antes de que se
+ * declararan.
+ *
+ * Mismo problema que con los índices: `CREATE TABLE IF NOT EXISTS` es todo o
+ * nada, así que una columna añadida hoy a esa declaración no aparece nunca en
+ * una base que ya existía. Y aquí la consecuencia no es lentitud, es un 500:
+ * `users.must_change_password` se lee en cada petición autenticada.
+ *
+ * Van en una tabla y no en una tirada de `if`s con `return`: cuando esto
+ * comprobaba una sola columna, el atajo era salir en cuanto estuviera, y la
+ * segunda columna que se añadiera aquí no se habría creado nunca en ninguna base
+ * que ya tuviera la primera —que son todas—. El fallo no habría dado la cara al
+ * migrar, sino después, como un `Unknown column` en mitad de una consulta.
+ */
+const COLUMNAS_REQUERIDAS: ReadonlyArray<[string, string, string]> = [
+  ["users", "must_change_password", "TINYINT(1) NOT NULL DEFAULT 0"],
+  /**
+   * Ruta de la foto del intento dentro del bucket de Supabase.
+   *
+   * Se guarda la ruta y no una URL: las URLs de un bucket privado se firman y
+   * caducan al minuto, así que una guardada sería una URL rota. La de verdad se
+   * pide en el momento de mirarla (ver `storage/supabase.ts`).
+   *
+   * Es `NULL` cuando no hay foto, y eso pasa en dos casos normales: los intentos
+   * anteriores a este cambio, y los de cualquier instalación sin Supabase
+   * configurado, donde el sistema sigue funcionando sin guardar imágenes.
+   */
+  ["sessions", "image_path", "VARCHAR(255) NULL"],
+];
+
+async function asegurarColumnas(): Promise<void> {
+  for (const [tabla, columna, definicion] of COLUMNAS_REQUERIDAS) {
+    if (await existeColumna(tabla, columna)) continue;
+    // Los tres valores son literales de este archivo, no entran por petición:
+    // por eso se pueden interpolar, que es lo único que admite MySQL para
+    // identificadores.
+    await pool.query(`ALTER TABLE \`${tabla}\` ADD COLUMN \`${columna}\` ${definicion}`);
+    console.log(`[migración] columna ${columna} añadida a ${tabla}`);
+  }
+}
+
 async function contar(tabla: string): Promise<number> {
   const [filas] = await pool.query<any[]>(`SELECT COUNT(*) AS c FROM \`${tabla}\``);
   return Number(filas[0]?.c ?? 0);
@@ -268,13 +312,19 @@ async function sembrarUsuarios(): Promise<void> {
  * Carga el catálogo de figuras objetivo desde figures_seed.json.
  *
  * Cada figura guarda su silueta de referencia como un polígono normalizado
- * (coordenadas 0..1, relación de aspecto preservada). Esas siluetas se
- * extrajeron del dataset de entrenamiento FigurasArmadas_YOLOv8 tomando, por
- * cada clase, el polígono medoide (el más representativo por IoU).
+ * (coordenadas 0..1, relación de aspecto preservada). Las 14 primeras salieron
+ * del dataset FigurasArmadas_YOLOv8 (polígono medoide de cada clase); las seis
+ * añadidas el 6 de septiembre de 2026 —cisne, conejo sentado, canguro, cohete,
+ * vela y molino— salieron de las 112 fotos reales de `figuras_armadas_unet`,
+ * promediando las máscaras de cada figura tras alinearlas por giro.
+ *
+ * Añade las que falten, y NO toca las que ya están. Es a propósito: el catálogo
+ * crece cuando se suman figuras al JSON, pero si alguien renombró o desactivó
+ * una figura desde la base, esa decisión se respeta. Antes esta función se
+ * saltaba entera en cuanto la tabla tenía una fila, y las figuras nuevas del
+ * JSON no llegaban nunca a una instalación ya sembrada.
  */
 async function sembrarFiguras(): Promise<void> {
-  if ((await contar("figures")) > 0) return;
-
   let figuras: FiguraSemilla[];
   try {
     figuras = JSON.parse(await fs.readFile(config.figurasSeed, "utf-8"));
@@ -283,19 +333,27 @@ async function sembrarFiguras(): Promise<void> {
     return;
   }
 
+  let nuevas = 0;
   for (const f of figuras) {
-    await pool.query(
+    const [res] = await pool.query(
       `INSERT INTO figures
          (slug, name, emoji, description, difficulty, category, enabled,
           yolo_class_id, silhouette)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE id = id`,
       [
         f.slug, f.name, f.emoji, f.description, f.difficulty, f.category,
         Number(f.enabled), f.yolo_class_id ?? null, JSON.stringify(f.silhouette),
       ],
     );
+    if ((res as { affectedRows?: number }).affectedRows === 1) nuevas += 1;
   }
-  console.log(`[OK] ${figuras.length} figuras cargadas en MySQL`);
+  const total = await contar("figures");
+  console.log(
+    nuevas > 0
+      ? `[OK] ${nuevas} figuras nuevas cargadas en MySQL (${total} en el catálogo)`
+      : `[OK] Catálogo de figuras al día (${total} figuras)`,
+  );
 }
 
 /** Crea la base, migra lo que haga falta y siembra lo que esté vacío. */
@@ -304,6 +362,7 @@ export async function inicializarBaseDeDatos(): Promise<void> {
   await crearTablas();
   await asegurarIndices();
   await migrarDatosPersonales();
+  await asegurarColumnas();
   await sembrarUsuarios();
   await sembrarFiguras();
   console.log(

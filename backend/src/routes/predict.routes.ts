@@ -10,7 +10,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { obtenerFigura } from "../db/figures.js";
 import { analizar } from "../vision/client.js";
-import { exigirSesion } from "../auth/middleware.js";
+import { exigirClaveDefinitiva, exigirSesion } from "../auth/middleware.js";
 import { limitePredict } from "../security/headers.js";
 import { validarImagen } from "../security/imagen.js";
 import { noEncontrado } from "../http/errors.js";
@@ -59,26 +59,35 @@ const esquemaPredict = z.object({
     .catch(null),
 });
 
-rutasPredict.post("/predict", exigirSesion, limitePredict, async (req, res) => {
-  const datos = esquemaPredict.parse(req.body);
+rutasPredict.post(
+  "/predict",
+  exigirSesion,
+  // Con la clave temporal todavía puesta no se analiza nada: la cuenta aún no
+  // es del estudiante, y un intento anotado a su nombre desde una clave que
+  // repartió el docente no dice nada de lo que el niño sabe hacer.
+  exigirClaveDefinitiva,
+  limitePredict,
+  async (req, res) => {
+    const datos = esquemaPredict.parse(req.body);
 
-  // Antes de nada: ¿esto es una foto? Se comprueba por los bytes, no por lo que
-  // diga el cliente. Va primero para no gastar una consulta ni un segundo de
-  // detector en algo que no lo es.
-  const imagen = validarImagen(datos.image_b64);
+    // Antes de nada: ¿esto es una foto? Se comprueba por los bytes, no por lo que
+    // diga el cliente. Va primero para no gastar una consulta ni un segundo de
+    // detector en algo que no lo es.
+    const imagen = validarImagen(datos.image_b64);
 
-  const figura = await obtenerFigura(datos.figure_id);
-  if (!figura) throw noEncontrado(`Figura '${datos.figure_id}' no encontrada`);
+    const figura = await obtenerFigura(datos.figure_id);
+    if (!figura) throw noEncontrado(`Figura '${datos.figure_id}' no encontrada`);
 
-  const resultado = await analizar({
-    image_b64: imagen.base64,
-    crop: datos.crop ?? null,
-    figure: {
-      slug: figura.slug,
-      name: figura.name,
-      silhouette: figura.silhouette,
-    },
-  });
+    const resultado = await analizar({
+      image_b64: imagen.base64,
+      crop: datos.crop ?? null,
+      figure: {
+        slug: figura.slug,
+        name: figura.name,
+        silhouette: figura.silhouette,
+      },
+    });
 
-  res.json(resultado);
-});
+    res.json(resultado);
+  },
+);

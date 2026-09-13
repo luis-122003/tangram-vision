@@ -8,6 +8,45 @@ export interface User {
   role:  Role;
 }
 
+/**
+ * Estudiante tal como lo lista el panel del docente (`GET /students`).
+ *
+ * Trae el progreso junto a los datos de la cuenta porque es lo que se mira a la
+ * vez: el docente no abre esta pantalla para administrar usuarios, la abre para
+ * saber quién ya entró y quién sigue sin estrenar su clave.
+ */
+export interface Student {
+  id:    number;
+  name:  string;
+  email: string;
+  /** Sigue con la clave temporal: todavía no ha activado su perfil. */
+  must_change_password: boolean;
+  created_at:   string;
+  attempts:     number;
+  passed:       number;
+  last_attempt: string | null;
+}
+
+/**
+ * Respuesta de un alta o de un reseteo de clave.
+ *
+ * `temporary_password` llega **una sola vez**, en esta respuesta. El servidor
+ * solo guarda su hash, así que no hay ninguna otra forma de volver a verlo: si
+ * se pierde, hay que generar otro. La interfaz tiene que enseñarlo de forma que
+ * el docente pueda anotarlo antes de cerrar el aviso.
+ */
+export interface StudentCreated {
+  /**
+   * Puede llegar `null`: entre la escritura de la clave y la relectura de la
+   * fila cabe que otro docente diera de baja a ese estudiante. Es raro, pero la
+   * pantalla que muestra la clave no puede ser la que se caiga por ello: es la
+   * única vez que ese valor existe fuera del hash.
+   */
+  student: Student | null;
+  temporary_password: string;
+  detail: string;
+}
+
 // ─── Figuras del catálogo ──────────────────────────────────────────────────────
 export type Difficulty = "Fácil" | "Medio" | "Difícil";
 export type Category   = "Animales" | "Objetos" | "Personas";
@@ -78,6 +117,20 @@ export interface PredictResponse {
   confidence:      number;
   iou_score:       number;
   match:           boolean;
+  /**
+   * Qué fracción de un Tangram entero alcanzó a ver el detector (1 = las siete
+   * fichas) y si alcanzó para calificar.
+   *
+   * Con `detection_ok` en false **el resto del diagnóstico no se comprobó**:
+   * `checks` sale «bien» por vacuidad —dos fichas sueltas nunca se pisan entre
+   * sí— y el parecido se calcula sobre una silueta incompleta que el backend
+   * normaliza por área, así que se infla hasta el tamaño del modelo.
+   *
+   * Opcionales porque un backend anterior no los manda; ausentes se tratan como
+   * detección suficiente, que es como se comportaba antes.
+   */
+  coverage?:       number;
+  detection_ok?:   boolean;
   /** Acierto mínimo exigido por el servidor (configurable con MATCH_IOU). */
   match_threshold: number;
   pieces_used:     number;

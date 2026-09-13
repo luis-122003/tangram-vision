@@ -1,4 +1,7 @@
-import type { PredictRequest, PredictResponse, SessionRecord, StudentStats, SessionRow, Figure, User } from "../types";
+import type {
+  PredictRequest, PredictResponse, SessionRecord, StudentStats, SessionRow,
+  Figure, Student, StudentCreated, User,
+} from "../types";
 import {
   actualizarAcceso, cabeceraAuth, cerrarSesion, iniciarSesion,
   obtenerRefresco, sesionExpirada,
@@ -127,6 +130,8 @@ export interface LoginResponse {
   role:         string;
   name:         string;
   id:           number;
+  /** La cuenta sigue con la clave temporal que le puso el docente. */
+  must_change_password?: boolean;
 }
 
 /**
@@ -151,6 +156,27 @@ export async function login(email: string, password: string): Promise<User> {
     throw new Error(err.detail ?? "Credenciales incorrectas");
   }
   const data: LoginResponse = await res.json();
+
+  /**
+   * Un estudiante con la clave temporal todavía puesta no entra por aquí.
+   *
+   * No es una restricción arbitraria: el sitio donde se cambia la clave es la
+   * app del celular —es la que tiene el teclado de cuatro dígitos y la pantalla
+   * de activación—, y esta web no tiene ninguna forma de cambiarla. Dejarlo
+   * entrar sería darle un catálogo en el que puede elegir figura, armarla y
+   * fotografiarla para recibir un 403 al final, sin una sola palabra que
+   * explique por qué. Mejor decírselo antes de empezar.
+   *
+   * La sesión **no se abre**: se lanza antes de `iniciarSesion`, así que no
+   * queda ningún token guardado de un intento que no prosperó.
+   */
+  if (data.must_change_password === true && data.role === "student") {
+    throw new Error(
+      "Tu clave todavía es la temporal que te dio tu profesor. Ábrela en la " +
+      "app del celular para cambiarla; después podrás entrar también aquí.",
+    );
+  }
+
   const usuario: User = {
     id:    data.id,
     name:  data.name,
@@ -217,8 +243,72 @@ export async function getStudentSessions(
   );
 }
 
+/**
+ * Cifras de rendimiento de un estudiante. **Solo el docente**: a un estudiante
+ * le responde 403, aunque pregunte por sí mismo.
+ *
+ * Dejó de usarse en la pantalla de inicio del estudiante cuando esas tarjetas se
+ * retiraron; el progreso de las actividades se consulta desde el panel.
+ */
 export async function getStudentStats(studentId: number): Promise<StudentStats> {
   return apiFetch<StudentStats>(`/students/${studentId}/stats`);
+}
+
+// ─── Gestión de estudiantes (solo docente) ─────────────────────────────────────
+/**
+ * Estas cinco llamadas responden 403 a un estudiante. No es solo una cuestión
+ * de permisos: son los datos personales de todo el curso, y el backend los
+ * comprueba contra la base en cada petición, no contra lo que diga el token.
+ */
+export async function getStudents(): Promise<Student[]> {
+  return apiFetch<Student[]>("/students");
+}
+
+/**
+ * Da de alta un estudiante y devuelve la clave con la que va a entrar.
+ *
+ * `password` es opcional y decide el régimen de la cuenta: si el docente la
+ * escribe, esa es ya la contraseña del estudiante; si la omite, el servidor
+ * genera cuatro dígitos y el niño tendrá que cambiarlos la primera vez.
+ *
+ * En los dos casos la clave viene en la respuesta y **no se puede volver a
+ * pedir**: el servidor guarda solo su hash. Quien llame tiene que enseñarla
+ * hasta que el docente la descarte a propósito, no en un aviso que se desvanezca
+ * solo. Se envía omitiendo el campo —no como cadena vacía— porque el esquema del
+ * backend valida un mínimo de 4 caracteres y un `""` sería un 422.
+ */
+export async function createStudent(
+  name: string, email: string, password?: string,
+): Promise<StudentCreated> {
+  return apiFetch<StudentCreated>("/students", {
+    method: "POST",
+    body:   JSON.stringify(password ? { name, email, password } : { name, email }),
+  });
+}
+
+export async function updateStudent(
+  id: number, cambios: { name?: string; email?: string },
+): Promise<{ student: Student }> {
+  return apiFetch<{ student: Student }>(`/students/${id}`, {
+    method: "PATCH",
+    body:   JSON.stringify(cambios),
+  });
+}
+
+/**
+ * Genera una clave temporal nueva. Para cuando un niño olvida la suya.
+ *
+ * Cierra además las sesiones que ese estudiante tuviera abiertas: si la clave
+ * se resetea porque alguien más entró en la cuenta, dejar viva la sesión de ese
+ * alguien vaciaría el gesto de sentido.
+ */
+export async function resetStudentPassword(id: number): Promise<StudentCreated> {
+  return apiFetch<StudentCreated>(`/students/${id}/password/reset`, { method: "POST" });
+}
+
+/** Da de baja al estudiante **y borra todos sus intentos**. No tiene vuelta atrás. */
+export async function deleteStudent(id: number): Promise<void> {
+  await apiFetch(`/students/${id}`, { method: "DELETE" });
 }
 
 // ─── Health check ──────────────────────────────────────────────────────────────

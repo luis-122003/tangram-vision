@@ -10,24 +10,16 @@ import Svg, { Path, Rect } from "react-native-svg";
 import { predict, saveSession } from "../api/client";
 import type { Figure, PredictResponse, User } from "../api/types";
 import Silhouette from "../components/Silhouette";
-import Comparison from "../components/Comparison";
 import TangramPiece from "../components/TangramPiece";
 import Icon from "../components/Icon";
 import {
-  Bar, Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton,
+  Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton,
 } from "../components/ui";
 import {
-  C, R, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY, pieceCount,
-  TOTAL_PIECES, cardColor, display, shout, formatTime, pct, tabular,
+  C, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY,
+  cardColor, display, shout, formatTime, tabular,
   raised, flat, onFill,
 } from "../theme";
-
-/**
- * Acierto mínimo por defecto, solo por si una respuesta vieja no trae
- * `match_threshold`. El valor bueno es siempre el del servidor: allá se puede
- * cambiar por variable de entorno y aquí no habría forma de enterarse.
- */
-const MATCH_IOU_FALLBACK = 0.75;
 
 /**
  * Alturas de las dos barras que se dibujan sobre la cámara.
@@ -65,10 +57,26 @@ const MARCO_MARGEN = 0.025;
  * El preview de la cámara llena la pantalla recortando por los lados (`cover`),
  * y la foto guardada tiene la relación de aspecto del sensor, que no es la de la
  * pantalla. La correspondencia entre lo que se ve y lo que se guarda es, por
- * tanto, aproximada. Este colchón hace que el recorte peque de grande: es mejor
- * incluir un poco de mesa alrededor que cortarle una ficha a la figura.
+ * tanto, aproximada.
+ *
+ * Estuvo en 1.15 —un 15% de margen alrededor del cuadro— con el argumento de
+ * que era mejor incluir mesa de más que cortarle una ficha a la figura. Se baja
+ * a 1.0 por dos razones:
+ *
+ *  · **La pantalla promete otra cosa.** Debajo del visor dice «que la figura
+ *    completa quepa dentro del cuadro». Si luego se analiza y se enseña un 15%
+ *    de alrededor, el cuadro no es el límite que dice ser, y lo que el niño ve
+ *    en su foto no es lo que encuadró.
+ *  · **El colchón desactivaba el aviso que lo cubría.** `touches_edge` se mide
+ *    sobre la imagen recortada: con margen, una figura pegada al borde del
+ *    cuadro no tocaba el borde del recorte, así que nunca saltaba el «no cabía
+ *    completa, aléjate un poco». El caso que el colchón quería salvar es
+ *    justamente el que dejaba sin diagnosticar.
+ *
+ * Sin margen, una figura que se sale del cuadro se corta —y entonces sí salta
+ * el aviso, que es lo correcto: la foto hay que repetirla.
  */
-const RECORTE_COLCHON = 1.15;
+const RECORTE_COLCHON = 1.0;
 
 /**
  * Lado mayor al que se encoge la foto antes de subirla.
@@ -168,13 +176,59 @@ async function encogerFoto(uri: string, ancho: number, alto: number): Promise<{
   return { base64: salida.base64, width: salida.width, height: salida.height };
 }
 
+/**
+ * Recorta la foto por el mismo cuadro que se manda a analizar. Solo para verla.
+ *
+ * Hasta ahora la pantalla de resultado enseñaba `shot.uri`: la foto **entera**,
+ * con la mesa, el borde de la hoja y lo que hubiera alrededor. Pero lo que el
+ * servidor analiza es el recorte del cuadro de encuadre. Eran dos imágenes
+ * distintas, y la que el niño veía no era la que se juzgó: si sobre la mesa
+ * quedaba una ficha suelta fuera del cuadro, él la veía en su foto y no entendía
+ * por qué el sistema decía que le faltaba.
+ *
+ * `crop` viene normalizado, así que sirve igual sobre la foto original que sobre
+ * la encogida mientras se conserve la proporción, que es lo que garantiza
+ * `encogerFoto` al fijar solo el lado mayor.
+ *
+ * Si el recorte falla no se cae el intento: se enseña la foto completa, que es
+ * exactamente lo que se hacía antes.
+ */
+async function recortarParaMostrar(
+  uri: string, ancho: number, alto: number,
+  crop: [number, number, number, number],
+): Promise<string | null> {
+  try {
+    const rect = {
+      originX: Math.round(crop[0] * ancho),
+      originY: Math.round(crop[1] * alto),
+      width:   Math.round(crop[2] * ancho),
+      height:  Math.round(crop[3] * alto),
+    };
+    if (rect.width < 8 || rect.height < 8) return null;
+    const imagen = await ImageManipulator.manipulate(uri).crop(rect).renderAsync();
+    const salida = await imagen.saveAsync({ compress: 0.8, format: SaveFormat.JPEG });
+    return salida.uri ?? null;
+  } catch {
+    return null;
+  }
+}
+
 type Phase = "prepare" | "camera" | "analyzing" | "result";
 
 /** Lo que se anota en `sessions` cuando termina un intento. */
 type Registro = Parameters<typeof saveSession>[0];
 
-export default function GameScreen({ user, figure, onExit }: {
-  user: User; figure: Figure; onExit: () => void;
+export default function GameScreen({
+  user, figure, onExit, onOpenMaterials, siguiente, onSiguiente,
+}: {
+  user: User; figure: Figure; onExit: () => void; onOpenMaterials: () => void;
+  /**
+   * La figura que sigue a esta en el orden de progresión, o `null` si esta es
+   * la última del catálogo. La calcula la raíz de la app con `siguienteFigura`.
+   */
+  siguiente?: Figure | null;
+  /** Encadenar con la siguiente sin pasar por el catálogo. */
+  onSiguiente?: (fig: Figure) => void;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
@@ -232,6 +286,16 @@ export default function GameScreen({ user, figure, onExit }: {
         { width, height },
         { width: foto.width, height: foto.height },
       );
+      // La foto que se enseña pasa a ser la misma región que se analiza. Va sin
+      // `await` a propósito: recortar tarda unas décimas y el análisis es lo que
+      // el niño está esperando, así que no se pone por delante. La foto completa
+      // ya está en pantalla desde `setPhoto(shot.uri)` y se sustituye sola en
+      // cuanto el recorte esté, casi siempre antes de que llegue la respuesta.
+      if (crop) {
+        void recortarParaMostrar(shot.uri, shot.width, shot.height, crop)
+          .then(recortada => { if (recortada) setPhoto(recortada); });
+      }
+
       await analyze(foto.base64, crop);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al tomar la foto");
@@ -349,6 +413,11 @@ export default function GameScreen({ user, figure, onExit }: {
             <Eyebrow>{figure.category} · {figure.difficulty}</Eyebrow>
             <Text style={[display(26), s.topName]} numberOfLines={1}>{figure.name}</Text>
           </View>
+          {/* Aquí es donde de verdad se consulta: la foto salió mal y el
+              estudiante quiere saber qué hizo distinto. Va en la fase de
+              preparación y no dentro de la cámara, porque abrir una pantalla
+              encima del visor obliga a soltar el encuadre que ya tenía. */}
+          <IconButton name="kit" onPress={onOpenMaterials} label="Qué materiales necesito" />
         </View>
 
         {/* La figura objetivo, encajada en un nicho hundido: es el molde que el
@@ -560,310 +629,114 @@ export default function GameScreen({ user, figure, onExit }: {
   // ── Resultado ───────────────────────────────────────────────────────────────
   if (!result) return <View style={s.center}><ActivityIndicator color={C.ink} size="large" /></View>;
 
+  /**
+   * Lo que ve el estudiante es un veredicto y **una sola pista**.
+   *
+   * Antes esta pantalla enseñaba el diagnóstico completo del validador: el
+   * porcentaje de parecido, las cinco comprobaciones una por una, el inventario
+   * de fichas detectadas y la cobertura por franjas de la silueta. Todo eso es
+   * cierto y todo eso sirve —para el docente—. Delante de un niño de primaria
+   * hacía tres cosas malas a la vez: convertía armar un Tangram en una nota
+   * («68 %»), le daba cinco frentes por los que empezar a corregir en vez de
+   * uno, y enseñaba tanta tripa del sistema que la pregunta dejaba de ser «¿qué
+   * acomodo?» para pasar a ser «¿qué significa IoU?».
+   *
+   * El diagnóstico no se pierde: sigue llegando entero en la respuesta y sigue
+   * guardándose en `sessions`, que es de donde lo lee el panel del docente. Lo
+   * que cambia es quién lo lee.
+   */
   const ok = result.match;
-  const threshold = result.match_threshold ?? MATCH_IOU_FALLBACK;
-  const missing = result.pieces?.missing ?? {};
-  const extra = result.pieces?.extra ?? {};
-  const missingCount = Object.values(missing).reduce((a, b) => a + b, 0);
-  const missingNames = Object.entries(missing)
-    .map(([kind, n]) => pieceCount(kind, n))
-    .join(", ");
 
-  // Revisión del validador geométrico: las cinco cosas que tiene que cumplir un
-  // Tangram bien armado. Es lo que convierte el porcentaje en algo accionable,
-  // así que se muestra siempre —también cuando está todo bien, porque ver las
-  // cinco marcas en verde es parte del refuerzo—.
-  const checks = result.checks;
-  const checkRows = checks ? [
-    {
-      key: "inventory", ok: checks.inventory.ok, label: "Usaste las 7 fichas",
-      detail: `${checks.inventory.counted} de ${checks.inventory.expected}`,
-    },
-    {
-      key: "overlap", ok: checks.overlap.ok, label: "Ninguna ficha encima de otra",
-      detail: checks.overlap.ok ? "Bien" : `${pct(checks.overlap.fraction)} montado`,
-    },
-    {
-      key: "holes", ok: checks.holes.ok, label: "Sin espacios vacíos",
-      detail: checks.holes.ok
-        ? "Bien"
-        : checks.holes.count === 1 ? "1 hueco" : `${checks.holes.count} huecos`,
-    },
-    {
-      key: "connectivity", ok: checks.connectivity.ok, label: "Todas las fichas juntas",
-      detail: checks.connectivity.ok
-        ? "Bien"
-        : checks.connectivity.loose === 1 ? "1 suelta" : `${checks.connectivity.loose} sueltas`,
-    },
-    {
-      key: "shape", ok: checks.shape.ok, label: "Se parece al modelo",
-      detail: pct(checks.shape.iou),
-    },
-  ] : [];
-
-  // La figura calza, pero en espejo. Merece decirse aparte: el estudiante ve un
-  // porcentaje alto y no entiende por qué no se la dan por buena.
-  const mirrored = Boolean(checks?.shape.mirrored) && result.iou_score >= 0.6;
-
-  // Problema de foto, no de armado: la figura no cabía en el cuadro o salió
-  // demasiado pequeña. Cambia el veredicto y la acción principal, porque decirle
-  // «acomoda las fichas» a quien las tenía bien puestas lo manda a deshacer un
-  // trabajo correcto.
+  // El detector no vio Tangram suficiente como para juzgar nada. No es lo mismo
+  // que una figura mal armada, y la diferencia le importa al niño: en un caso
+  // hay que mover fichas y en el otro hay que repetir la foto sin tocar nada.
+  const fotoIlegible = result.detection_ok === false;
+  // Problema de encuadre, no de armado: la figura no cabía en el cuadro o salió
+  // demasiado pequeña. Decirle «acomoda las fichas» a quien las tenía bien
+  // puestas lo manda a deshacer un trabajo correcto.
   const encuadreMal = !ok && result.framing != null && !result.framing.ok
     && result.pieces_used > 0;
-  const encuadreTexto = result.framing?.touches_edge
-    ? "Tu figura no cabía completa en el cuadro. Aléjate un poco y repite la foto."
-    : "Tu figura salió muy pequeña para verla bien. Acércate un poco, sin que se salga del cuadro.";
+  const problemaDeFoto = encuadreMal || fotoIlegible;
 
-  // Se dibujan las 7 fichas esperadas y se marcan como ausentes tantas de cada
-  // tipo como diga `pieces.missing`.
-  const slots: { kind: string; missing: boolean }[] = [];
-  for (const p of PIECE_INVENTORY) {
-    const gone = missing[p.kind] ?? 0;
-    for (let i = 0; i < p.count; i++) slots.push({ kind: p.kind, missing: i >= p.count - gone });
-  }
+  const pista = pistaDelIntento(result, fotoIlegible, encuadreMal);
 
-  // Un polígono necesita al menos 3 vértices; con menos no hay nada que pintar.
-  const overlay =
-    (result.detected_polygon?.length ?? 0) >= 3 &&
-    (result.target_polygon?.length ?? 0) >= 3;
-
-  const worst = result.segments.length
-    ? result.segments.reduce((a, b) => (b.coverage < a.coverage ? b : a))
-    : null;
-  // Semáforo por franja: verde lo bien cubierto, amarillo lo regular, rojo lo
-  // que hay que revisar. Los umbrales 0,85 y 0,6 no se tocan: están espejados
-  // en los mensajes que redacta el backend. Y la cifra en porcentaje va siempre
-  // al lado, porque el color no puede ser el único canal.
-  const bandColor = (coverage: number) =>
-    coverage >= 0.85 ? C.success : coverage >= 0.6 ? C.warning : C.danger;
+  // Tres estados y tres colores: verde lo logrado, amarillo lo que está a
+  // medias, azul cuando el problema no es la figura sino la foto. Amarillo y no
+  // rojo para «casi la tienes»: un niño que armó mal una figura no ha cometido
+  // un error, está a mitad de camino. El icono y el titular dicen lo mismo, así
+  // que ni el color ni la palabra son imprescindibles por separado.
+  const tono = ok ? C.success : problemaDeFoto ? C.info : C.warning;
 
   return (
     <ScrollView style={s.flex} contentContainerStyle={s.resultScroll}>
-      {/* Veredicto. Tres estados y tres colores: verde lo logrado, amarillo lo
-          que está a medias, azul cuando el problema no es la figura sino la
-          foto. Amarillo y no rojo para «casi la tienes»: un niño que armó mal
-          una figura no ha cometido un error, está a mitad de camino.
-          El icono y el titular dicen lo mismo, así que ni el color ni la
-          palabra son imprescindibles por separado. */}
       <View style={s.verdictWrap}>
-        {(() => {
-          const tono = ok ? C.success : encuadreMal ? C.info : C.warning;
-          return (
-            <View style={[s.verdict, raised(6, tono), s.verdictLoud]}>
-              <View style={s.verdictRow}>
-                <View style={[s.verdictMark, flat(C.card, B.base)]}>
-                  <Icon
-                    name={ok ? "check" : encuadreMal ? "camera" : "bang"} size={24}
-                    color={C.ink} strokeWidth={3.4}
-                  />
-                </View>
-                {/* `flexShrink` explícito: en RN el texto no encoge dentro de una
-                    fila y en pantallas estrechas se saldría del bloque. */}
-                <Text style={[shout(30, onFill(tono)), s.verdictTitle]}>
-                  {ok ? "LO LOGRASTE" : encuadreMal ? "REPITE LA FOTO" : "CASI LA TIENES"}
-                </Text>
-              </View>
-              <Text style={s.verdictText}>{result.feedback}</Text>
-              {result.mock && (
-                <Text style={s.mock}>
-                  Modo demostración: el servidor no tiene el detector cargado.
-                </Text>
-              )}
+        <View style={[s.verdict, raised(6, tono), s.verdictLoud]}>
+          <View style={s.verdictRow}>
+            <View style={[s.verdictMark, flat(C.card, B.base)]}>
+              <Icon
+                name={ok ? "check" : problemaDeFoto ? "camera" : "bang"} size={24}
+                color={C.ink} strokeWidth={3.4}
+              />
             </View>
-          );
-        })()}
+            {/* `flexShrink` explícito: en RN el texto no encoge dentro de una
+                fila y en pantallas estrechas se saldría del bloque. */}
+            <Text style={[shout(30, onFill(tono)), s.verdictTitle]}>
+              {ok ? "LO LOGRASTE" : problemaDeFoto ? "REPITE LA FOTO" : "CASI LA TIENES"}
+            </Text>
+          </View>
+          <Text style={s.verdictText}>
+            {ok
+              ? "Tu figura quedó igual al modelo. ¡Muy bien!"
+              : problemaDeFoto
+                ? "Con esta foto no alcancé a revisar tu figura."
+                : "Todavía no calza con el modelo."}
+          </Text>
+          {result.mock && (
+            <Text style={s.mock}>
+              Modo demostración: el servidor no tiene el detector cargado.
+            </Text>
+          )}
+        </View>
       </View>
 
       <View style={s.resultBody}>
-        {encuadreMal && (
+        {/* La pista. Una, la que más pesa (ver `pistaDelIntento`), y con la
+            acción escrita en imperativo: lo que hay que poder hacer después de
+            leerla es levantarse y mover una ficha, no interpretar una cifra. */}
+        {!ok && (
           <Card sunken depth={4} contentStyle={s.framingCard}>
             <View style={s.framingHead}>
-              <Icon name="camera" size={19} color={C.ink} />
-              <Eyebrow>Es la foto, no tu figura</Eyebrow>
+              <Icon
+                name={problemaDeFoto ? "camera" : "bang"} size={19}
+                color={C.ink} strokeWidth={problemaDeFoto ? 2.4 : 3.2}
+              />
+              <Eyebrow>{problemaDeFoto ? "Es la foto, no tu figura" : "Prueba con esto"}</Eyebrow>
             </View>
-            <Text style={s.framingText}>{encuadreTexto}</Text>
+            <Text style={s.framingText}>{pista}</Text>
             <Text style={s.framingHint}>
-              No muevas las fichas: puede que ya estuvieran bien.
+              {problemaDeFoto
+                ? "No muevas las fichas: puede que ya estuvieran bien."
+                : "Vuelve a mirar el modelo antes de repetir."}
             </Text>
           </Card>
         )}
 
-        {/* Tu figura sobre el modelo. Si el servidor está en modo demostración
-            no manda contornos, y entonces se muestran la foto y el modelo. */}
-        {overlay ? (
-          <Card contentStyle={s.compare}>
-            <Eyebrow style={s.piecesTitle}>Tu figura sobre el modelo</Eyebrow>
-            <View style={s.overlay}>
-              <Comparison
-                detected={result.detected_polygon}
-                target={result.target_polygon}
-                size={168}
-                color={C.cobalto}
-              />
-            </View>
-            <View style={s.legendRow}>
-              <View style={s.legendItem}>
-                <View style={s.swatchTarget} />
-                <Text style={s.compareLabel}>El modelo</Text>
-              </View>
-              <View style={s.legendItem}>
-                <View style={[s.swatchMine, { backgroundColor: C.cobalto }]} />
-                <Text style={s.compareLabel}>Lo que armaste</Text>
-              </View>
-            </View>
-          </Card>
-        ) : (
-          <Card contentStyle={s.compare}>
-            <Eyebrow style={s.piecesTitle}>Tu foto y el modelo</Eyebrow>
-            <View style={s.compareRow}>
-              <View style={s.compareCell}>
-                {photo
-                  ? <Image source={{ uri: photo }} style={s.compareImg} />
-                  : <View style={[s.compareImg, s.compareEmpty]} />}
-                <Text style={s.compareLabel}>Lo que armaste</Text>
-              </View>
-              <View style={s.compareCell}>
-                <View style={[s.compareImg, s.compareModel]}>
-                  <Silhouette figure={figure} size={100} mode="outline" color={C.ink} />
-                </View>
-                <Text style={s.compareLabel}>El modelo</Text>
-              </View>
-            </View>
-          </Card>
-        )}
-
-        {/* Métricas */}
+        {/* Lo único que se mide delante del niño es el tiempo, y no es una nota:
+            es lo que le deja competir consigo mismo sin que nadie le ponga un
+            número a la figura. */}
         <Card style={s.gap} sunken depth={4} contentStyle={s.metrics}>
           <View style={s.metric}>
-            <Eyebrow>Parecido</Eyebrow>
-            <Text style={[display(28), s.metricValue, tabular]}>{pct(result.iou_score)}</Text>
-            <Bar value={result.iou_score} mark={ok ? undefined : threshold} />
-            {!ok && <Text style={s.metricHint}>La marca es lo mínimo que necesitas</Text>}
-          </View>
-          <View style={s.metricSide}>
             <Eyebrow>Tiempo</Eyebrow>
             <Text style={[display(28), s.metricValue, tabular]}>{formatTime(seconds)}</Text>
-            {/* «primer» y «tercer» se apocopan delante del sustantivo. */}
+          </View>
+          <View style={s.metricSide}>
+            <Eyebrow>Intentos</Eyebrow>
+            <Text style={[display(28), s.metricValue, tabular]}>{attempts}</Text>
             <Text style={s.metricHint}>
-              {attempts === 1 || attempts === 3
-                ? `${attempts}.er intento`
-                : `${attempts}.º intento`}
+              {attempts === 1 ? "foto en esta figura" : "fotos en esta figura"}
             </Text>
           </View>
         </Card>
-
-        {/* Revisión del validador: por qué está bien o mal, punto por punto */}
-        {checkRows.length > 0 && (
-          <Card style={s.gap} contentStyle={s.checksCard}>
-            <Eyebrow style={s.piecesTitle}>Revisión de tu armado</Eyebrow>
-            {checkRows.map(row => (
-              // Verde lo superado, amarillo lo que falta. La marca va sin
-              // sombra: son cinco filas seguidas, y cinco sombras en una lista
-              // tan corta se leen como ruido. El icono y el detalle escrito
-              // dicen cuál es cuál sin depender del color.
-              <View key={row.key} style={s.checkRow}>
-                <View style={[s.checkMark, flat(row.ok ? C.success : C.warning, 2)]}>
-                  <Icon
-                    name={row.ok ? "check" : "bang"} size={13}
-                    color={C.ink} strokeWidth={3.6}
-                  />
-                </View>
-                <Text style={s.checkLabel} numberOfLines={1}>{row.label}</Text>
-                <Text style={[s.checkValue, !row.ok && s.checkValueOff]}>
-                  {row.detail}
-                </Text>
-              </View>
-            ))}
-            {ok && !checks!.inventory.ok && (
-              <Text style={s.checkHint}>
-                A la cámara le faltaron fichas por ver, pero tu figura calzó con
-                el modelo: cuenta como lograda.
-              </Text>
-            )}
-            {mirrored && (
-              <Text style={s.checkHint}>
-                Tu figura está en espejo: quedó volteada respecto al modelo.
-              </Text>
-            )}
-          </Card>
-        )}
-
-        {/* Fichas detectadas por el modelo */}
-        <Card style={s.gap} contentStyle={s.piecesCard}>
-          <View style={s.piecesHead}>
-            <Eyebrow>Fichas detectadas</Eyebrow>
-            {/* `pieces_used` es lo que contó YOLO: con fichas de más dirá
-                "9 de 7", que es justo lo que hay que contarle al estudiante. */}
-            <Text style={[display(15, C.ink), tabular]}>
-              {result.pieces_used} de {TOTAL_PIECES}
-            </Text>
-          </View>
-          <View style={s.piecesRow}>
-            {slots.map((slot, i) => (
-              <TangramPiece
-                key={i} kind={slot.kind} size={34}
-                missing={slot.missing}
-              />
-            ))}
-          </View>
-          {missingCount > 0 && (
-            <View style={s.legend}>
-              <View style={s.legendMark} />
-              <Text style={s.legendText}>
-                La punteada es la que la cámara no encontró: {missingNames}
-              </Text>
-            </View>
-          )}
-          {Object.keys(extra).length > 0 && (
-            <View style={s.legend}>
-              <Text style={s.legendText}>
-                Hay fichas de más en la foto. Deja sobre la mesa solo las 7 del Tangram.
-              </Text>
-            </View>
-          )}
-        </Card>
-
-        {/* Qué parte revisar: bandas de cobertura del backend. Señalar un tercio
-            concreto solo ayuda si el resto de la figura ya calza; con un
-            parecido bajo el problema no está en una banda, está en casi todas
-            las fichas, y el mismo criterio usa el backend para el mensaje. */}
-        {!ok && (checks ? checks.shape.close : true) && result.segments.length > 0 && (
-          <Card style={s.gap} contentStyle={s.bandsCard}>
-            <Eyebrow style={s.piecesTitle}>Qué parte revisar</Eyebrow>
-            <View style={s.bandsRow}>
-              <Silhouette
-                figure={figure} size={140}
-                bands={result.segments.map(seg => bandColor(seg.coverage))}
-              />
-              <View style={s.bandsList}>
-                {result.segments.map(seg => (
-                  <View key={seg.label} style={s.band}>
-                    {/* El color va en la muestra, nunca en el texto: un amarillo
-                        sobre el papel da 1,2:1 y no se lee. La peor banda se
-                        destaca con negrita, que sí funciona sobre cualquier
-                        fondo y para cualquier vista. */}
-                    <View style={[s.bandSwatch, flat(bandColor(seg.coverage), 2)]} />
-                    <Text style={[
-                      s.bandLabel,
-                      seg === worst && s.bandLabelWorst,
-                    ]} numberOfLines={1}>
-                      {seg.label.replace("Parte de ", "").replace("Parte del ", "")}
-                    </Text>
-                    <Text style={[display(17, C.ink), tabular]}>
-                      {pct(seg.coverage)}
-                    </Text>
-                  </View>
-                ))}
-                {worst && (
-                  <Text style={s.bandsHint}>
-                    Acomoda la {worst.label.toLowerCase()} de tu figura.
-                  </Text>
-                )}
-              </View>
-            </View>
-          </Card>
-        )}
 
         {/* El intento no llegó al servidor. Va justo encima de las acciones, que
             es donde el estudiante decide seguir: enterarse después de haber
@@ -889,17 +762,34 @@ export default function GameScreen({ user, figure, onExit }: {
           </Card>
         )}
 
-        {/* Acciones: una sola principal */}
+        {/* Acciones: una sola principal.
+
+            Al lograrla, esa principal es **la figura siguiente por su nombre**,
+            no «volver al catálogo». Antes el botón decía «Siguiente figura» y
+            devolvía a la rejilla, donde el niño tenía que acordarse de cuál
+            acababa de hacer para buscar la de al lado. El orden lo pone la raíz
+            de la app (por dificultad, ver `api/orden.ts`), así que lo que hay
+            detrás del botón es siempre la que toca. */}
         <View style={[s.gap, s.actions]}>
           {ok ? (
             <>
-              <PrimaryButton label="Siguiente figura" onPress={onExit} />
+              {siguiente && onSiguiente ? (
+                <PrimaryButton
+                  label={`Sigue: ${siguiente.name}`} tone="success"
+                  onPress={() => onSiguiente(siguiente)}
+                />
+              ) : (
+                // Última figura del catálogo: no hay ninguna a la que llevar, y
+                // dar la vuelta hasta la primera se lee como si la app se
+                // hubiera perdido.
+                <PrimaryButton label="Volver al catálogo" tone="success" onPress={onExit} />
+              )}
               <SecondaryButton label="Armarla otra vez" icon="refresh" onPress={retry} />
             </>
           ) : (
             <>
               <PrimaryButton
-                label={encuadreMal ? "Tomar la foto otra vez" : "Acomodar y repetir"}
+                label={problemaDeFoto ? "Tomar la foto otra vez" : "Acomodar y repetir"}
                 icon="camera" onPress={retry}
               />
               <SecondaryButton label="Ver el modelo otra vez" onPress={review} />
@@ -909,6 +799,87 @@ export default function GameScreen({ user, figure, onExit }: {
       </View>
     </ScrollView>
   );
+}
+
+/**
+ * La única pista que se le da al estudiante, y por qué esa.
+ *
+ * El validador devuelve cinco comprobaciones y una cobertura por franjas, y
+ * casi siempre falla más de una a la vez: una figura con una ficha suelta
+ * también tiene un hueco y también se parece poco al modelo. Enseñarlas todas
+ * no es más información, es ninguna, porque no dice por dónde empezar.
+ *
+ * El orden de esta cascada es el orden en que un niño puede arreglar las cosas,
+ * y cada paso hace innecesarios los siguientes:
+ *
+ *   1. **La foto.** Si no se ve, no hay nada que corregir en la mesa.
+ *   2. **Las fichas que faltan.** Sin las siete no hay figura posible, así que
+ *      cualquier otra pista sería sobre un armado incompleto.
+ *   3. **Las fichas sueltas.** Se ve de un vistazo y se arregla arrastrando.
+ *   4. **Las fichas montadas.** Igual de visible, y es lo que más deforma la
+ *      silueta.
+ *   5. **Los huecos.** Ya con todo junto y sin solapes, cerrar es el ajuste
+ *      fino.
+ *   6. **El espejo.** La figura está bien armada pero volteada: es la única
+ *      pista que hay que decir, porque el niño ve que le quedó igual y no
+ *      entiende por qué no se la dan por buena.
+ *   7. **La franja peor cubierta.** Con todo lo anterior correcto, señalar un
+ *      tercio concreto sí ayuda; antes, no.
+ *
+ * Es deliberado que devuelva una cadena y no una lista: el tipo es lo que
+ * impide que dentro de seis meses alguien «solo añada una segunda pista».
+ */
+function pistaDelIntento(
+  result: PredictResponse, fotoIlegible: boolean, encuadreMal: boolean,
+): string {
+  if (fotoIlegible) {
+    return "No alcancé a ver tus fichas. Mira que haya buena luz, que el fondo " +
+      "sea liso y que no queden manos en la foto.";
+  }
+  if (encuadreMal) {
+    return result.framing?.touches_edge
+      ? "Tu figura no cabía completa en el cuadro. Aléjate un poco y repite la foto."
+      : "Tu figura salió muy pequeña para verla bien. Acércate un poco, sin que " +
+        "se salga del cuadro.";
+  }
+
+  const checks = result.checks;
+  if (checks) {
+    if (!checks.inventory.ok) {
+      return "Te faltan fichas por poner. El Tangram se arma con las 7, todas " +
+        "sobre la mesa.";
+    }
+    if (!checks.connectivity.ok) {
+      return "Te quedó alguna ficha suelta, separada de las demás. Júntalas " +
+        "todas hasta que se toquen.";
+    }
+    if (!checks.overlap.ok) {
+      return "Tienes fichas montadas una encima de otra. En el Tangram se tocan, " +
+        "pero no se pisan.";
+    }
+    if (!checks.holes.ok) {
+      return "Te quedaron huecos por dentro de la figura. Junta bien las fichas " +
+        "hasta que no se vea la mesa entre ellas.";
+    }
+    // Solo con un parecido ya alto: por debajo de eso, «está en espejo» es una
+    // coincidencia del ajuste y no algo que el niño pueda ver ni arreglar.
+    if (checks.shape.mirrored && result.iou_score >= 0.6) {
+      return "Tu figura está al revés, como en un espejo. Dale la vuelta y " +
+        "vuelve a intentarlo.";
+    }
+  }
+
+  // Señalar un tercio concreto solo ayuda si el resto de la figura ya calza; con
+  // un parecido bajo el problema no está en una franja, está en casi todas las
+  // fichas. Es el mismo criterio con el que el backend redacta sus mensajes.
+  const cerca = checks ? checks.shape.close : true;
+  if (cerca && result.segments.length > 0) {
+    const peor = result.segments.reduce((a, b) => (b.coverage < a.coverage ? b : a));
+    return `Acomoda la ${peor.label.toLowerCase()} de tu figura: es la parte que ` +
+      "más se aleja del modelo.";
+  }
+
+  return "Compara tu figura con el modelo y acomoda las fichas que veas distintas.";
 }
 
 const s = StyleSheet.create({
@@ -929,8 +900,6 @@ const s = StyleSheet.create({
 
   piecesCard:{ padding: 16 },
   piecesTitle:{ marginBottom: S.md - 2 },
-  piecesHead:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-               marginBottom: 10 },
   piecesRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
   pieceCell: { alignItems: "center", gap: 5 },
   pieceCount:{ fontFamily: F.bold, fontSize: 11, color: C.muted },
@@ -1013,42 +982,11 @@ const s = StyleSheet.create({
   mock:      { fontFamily: F.bold, fontSize: 12, marginTop: 8, color: C.ink },
   resultBody:{ paddingHorizontal: S.lg + 4, paddingTop: S.md },
 
-  compare:   { padding: 16 },
-  compareRow:{ flexDirection: "row", gap: S.md },
-  compareCell:{ flex: 1 },
-  // `R.clip` y no 0: con radio cero, filete y un bitmap hijo que llena la caja,
-  // Android deja asomar un píxel de la imagen en las cuatro esquinas.
-  compareImg:{ width: "100%", height: 120, borderRadius: R.clip, overflow: "hidden",
-               borderWidth: B.hair, borderColor: C.ink,
-               alignItems: "center", justifyContent: "center" },
-  compareEmpty:{ backgroundColor: C.well },
-  compareModel:{ backgroundColor: C.card },
-  compareLabel:{ fontFamily: F.bold, fontSize: 12, color: C.ink, marginTop: 8 },
-
-  overlay:   { alignItems: "center", paddingVertical: 6 },
-  legendRow: { flexDirection: "row", gap: S.lg + 2, marginTop: S.md },
-  legendItem:{ flexDirection: "row", alignItems: "center", gap: 7 },
-  swatchTarget:{ width: 18, height: 12, backgroundColor: C.card,
-                 borderWidth: 2, borderColor: C.ink, borderStyle: "dashed" },
-  // Sólido, sin opacidad: en un estilo de colores planos, la transparencia se
-  // lee como suciedad. La muestra coincide con el relleno de `Comparison`.
-  swatchMine:{ width: 18, height: 12, backgroundColor: C.cobalto,
-               borderWidth: 2, borderColor: C.ink },
-
-  // Sin filete que las separe: las dos cifras se reparten el ancho y las separa
-  // el aire, como en el resto de la app.
   metrics:   { flexDirection: "row", alignItems: "stretch", padding: 4 },
   metric:    { flex: 1, padding: 14 },
   metricSide:{ width: 118, padding: 14 },
   metricValue:{ marginTop: 4, marginBottom: 10 },
   metricHint:{ fontFamily: F.regular, fontSize: 12, color: C.muted, marginTop: 8 },
-
-  legend:    { flexDirection: "row", alignItems: "center", gap: S.sm, marginTop: 14,
-               paddingTop: 12 },
-  legendMark:{ width: 16, height: 16, borderWidth: 2,
-               borderColor: C.ink, borderStyle: "dashed" },
-  // Frases explicativas, no rótulos: para primaria no bajan de 14.
-  legendText:{ flex: 1, fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.ink },
 
   saveCard:  { padding: 16 },
   saveAction:{ marginTop: 14 },
@@ -1058,27 +996,6 @@ const s = StyleSheet.create({
   framingText:{ fontFamily: F.regular, fontSize: 15, lineHeight: 21, color: C.ink },
   framingHint:{ fontFamily: F.bold, fontSize: 13, lineHeight: 19, color: C.ink,
                 marginTop: 7 },
-
-  checksCard:{ padding: 16 },
-  checkRow:  { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 7 },
-  checkMark: { width: 24, height: 24, alignItems: "center", justifyContent: "center" },
-  checkLabel:{ flex: 1, fontFamily: F.regular, fontSize: 14, color: C.ink },
-  checkValue:{ fontFamily: F.bold, fontSize: 13, color: C.muted },
-  checkValueOff:{ color: C.ink },
-  checkHint: { fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.ink,
-               paddingTop: 12, marginTop: 8 },
-
-  bandsCard: { padding: 16 },
-  bandsRow:  { flexDirection: "row", alignItems: "center", gap: S.lg },
-  bandsList: { flex: 1, gap: 14 },
-  band:      { flexDirection: "row", alignItems: "center", gap: 10 },
-  bandSwatch:{ width: 14, height: 14 },
-  bandLabel: { flex: 1, fontFamily: F.regular, fontSize: 13, color: C.ink,
-               textTransform: "capitalize" },
-  /** La peor banda se destaca con negrita, nunca con color de texto. */
-  bandLabelWorst:{ fontFamily: F.bold },
-  bandsHint: { fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.muted,
-               paddingTop: 12 },
 
   actions:   { gap: 12 },
 });

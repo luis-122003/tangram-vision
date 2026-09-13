@@ -46,17 +46,41 @@ python -m sintetico.entrenar --dataset datasets/tangram_formas --epocas 80
 
 ### En Google Colab
 
-El generador pesa unos kilobytes, así que **no subas imágenes**: sube el código y
-genera el dataset allí.
+Usa **`Colab_entrenar_drive.ipynb`**, que ya trae todo el circuito montado sobre
+Drive. Solo hay que subir dos archivos a la raíz de tu MyDrive:
+
+| archivo | qué es | se regenera con |
+|---|---|---|
+| `tangram_sintetico.zip` | este módulo + el validador + el modelo viejo | ver abajo |
+| `figuras_armadas_unet.zip` | las fotos reales para medir (114, de las que se usan 112) | ya lo tienes |
+
+El dataset **no se sube**: el generador pesa unos kilobytes y las 6000 imágenes se
+fabrican allí.
+
+Para rehacer el zip después de tocar el código:
 
 ```python
-!pip install ultralytics
-# sube sintetico/ y tangram_validator.py, respetando que sintetico/ cuelgue
-# de la misma carpeta que tangram_validator.py
-!python -m sintetico.generar --salida /content/ds --train 6000 --val 800
-!python -m sintetico.verificar /content/ds
-!python -m sintetico.entrenar --dataset /content/ds --epocas 80 --device 0
+python - <<'EOF'
+import zipfile, pathlib
+R = 'tangram_sintetico'
+with zipfile.ZipFile('tangram_sintetico.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.writestr(f'{R}/sintetico/__init__.py', '')
+    for o, d in [('evaluar_deteccion.py', f'{R}/evaluar_deteccion.py'),
+                 ('tangram_validator.py', f'{R}/tangram_validator.py'),
+                 ('models/tangram_piezas_seg_best.pt', f'{R}/models/tangram_piezas_seg_best.pt')]:
+        z.write(o, d)
+    for p in list(pathlib.Path('sintetico').glob('*.py')) + \
+             [pathlib.Path('sintetico/README.md')] + \
+             list(pathlib.Path('sintetico/fondos_reales').glob('*.jpg')):
+        z.write(p, f'{R}/{p}')
+EOF
 ```
+
+**Comprueba que el entorno tenga GPU antes de nada** (Entorno de ejecución →
+Cambiar tipo de entorno → GPU). En CPU el entrenamiento pasa de 2-3 horas a varios
+días, y Colab no avisa: arranca en CPU por defecto. La primera celda del notebook
+para en seco si no la encuentra, precisamente porque esto ya costó una corrida
+entera.
 
 El `data.yaml` guarda una ruta **absoluta**, así que hay que generarlo en la
 máquina donde se entrena (Ultralytics no resuelve `path: .` contra la carpeta del
@@ -101,31 +125,51 @@ fotos reales.
 
 ## La línea base, medida
 
-El dataset `figuras_armadas_unet` son 114 fotos reales de figuras armadas con la
-máscara de su silueta. Sirve para dos cosas aquí:
+El dataset `figuras_armadas_unet` son **112 fotos reales** de figuras armadas con
+la máscara de su silueta (eran 114; el 6 de septiembre se apartaron dos con la
+máscara mal trazada, ver `_excluidas/MOTIVO.txt`). Sirve para dos cosas aquí:
 
-**Como conjunto de test.** El modelo en producción, medido contra esas 114 fotos:
+**Como conjunto de test.** Los dos modelos, medidos **en la misma corrida, sobre
+las mismas 112 fotos y a 640 px** el 6 de septiembre de 2026:
 
-| | `tangram_piezas_seg_best.pt` |
-|---|---|
-| IoU de silueta (media) | **0,096** |
-| IoU ≥ 0,75 | 2 de 114 (2 %) |
-| Fichas detectadas | **1,21** de 7 |
-| Fotos con las 7 | 2 de 114 (2 %) |
+| | anterior, por color | este módulo, por forma | + `reparar_cuadrilateros` |
+|---|---:|---:|---:|
+| IoU de silueta (media) | 0,162 | 0,968 | **0,969** |
+| IoU de silueta (peor foto) | 0,000 | 0,904 | **0,904** |
+| IoU ≥ 0,75 | 2 de 112 (2 %) | 112 de 112 | **112 de 112 (100 %)** |
+| Fichas detectadas | 1,09 de 7 | 8,62 de 7 | **7,09 de 7** |
+| Fotos con las 7 | 1 de 112 | 1 de 112 | **103 de 112** |
+| Inventario exacto | 0 de 112 | 0 de 112 | **98 de 112 (88 %)** |
 
-El motivo se ve mirando las fotos: son de un Tangram de **otros colores** —romboide
-azul, triángulos rosa y verde— y el modelo busca `parallelogram_cyan`,
-`large_tri_orange`. Lo único que reconoce a veces es el cuadrado, que en ambos
-juegos es amarillo. Es la demostración empírica de que el detector actual no
-generaliza, y la razón de ser de este módulo.
+El motivo del derrumbe de la primera columna se ve mirando las fotos: son de un
+Tangram de **otros colores** —romboide azul, triángulos rosa y verde— y el modelo
+busca `parallelogram_cyan`, `large_tri_orange`. Lo único que reconoce a veces es
+el cuadrado, que en ambos juegos es amarillo. Es la demostración empírica de que
+el detector por color no generaliza, y la razón de ser de este módulo.
 
-Cuando el modelo nuevo esté entrenado, se compara contra esa misma tabla:
+La hipótesis del módulo queda comprobada: el modelo nuevo nunca vio ese Tangram
+—ni ningún otro, solo imágenes generadas— y lo reconoce casi perfectamente.
+
+Pero **sobredetecta**: en crudo ve 8,62 fichas donde hay 7, y el inventario no
+sale exacto en ninguna foto. La silueta sale bien igual porque los duplicados se
+pisan, pero el mensaje que se le da al estudiante sobre qué ficha falta o sobra
+sería equivocado. Eso lo corrige `tangram_validator.reparar_cuadrilateros` por
+geometría, sin reentrenar: es la tercera columna.
+
+**Y el sistema completo acierta la figura.** Con la cadena entera —detector,
+reparación, silueta y comparación contra el catálogo de 20 figuras— sobre las
+mismas 112 fotos: **111 de 112** identificadas bien y **110 de 112** aprobadas con
+`MATCH_IOU=0,80`. Las dos que se quedan cortas son las dos peores detecciones.
+
+El análisis completo, con lo que el resultado **no** demuestra, está en
+[RESULTADOS.md](RESULTADOS.md); el detalle por foto, en
+`comparacion_detectores.csv`.
 
 ```bash
 python evaluar_deteccion.py <dataset_unet> \
     --pesos models/tangram_piezas_seg_best.pt \
-    --comparar entrenamientos/tangram_formas/weights/best.pt \
-    --splits train,val,test
+    --comparar models/tangram_formas_v2.pt \
+    --splits train,val,test --csv comparacion_detectores.csv
 ```
 
 **Como fuente de superficies reales.** `fondos.py` borra la figura de cada foto
@@ -143,6 +187,15 @@ python -m sintetico.fondos --dataset <dataset_unet>
 tocan de refilón. Sin ese filtro salían constelaciones de piezas apenas rozándose,
 y lo que el detector tiene que aprender es a separar fichas que comparten aristas
 enteras —el caso difícil, y el único que ocurre de verdad—.
+
+**Las guardas de `entrenar.py`.** `_exigir_gpu()` para si se pidió GPU y no la
+hay; `_exigir_checkpoint_valido()` se niega a reanudar un `last.pt` sin estado de
+optimizador o entrenado con otro `data.yaml`; y entrenar sobre una carpeta que ya
+existe exige `--reanudar` explícito. Las tres salen de la misma corrida perdida: un
+`resume=True` sobre un checkpoint ya cerrado hizo que Ultralytics empezara de cero
+y, sin `data`, cayera a su dataset por defecto —`coco8-seg`—, así que entrenó 100
+épocas sobre ocho fotos de personas y perros bajo el nombre `tangram_formas`.
+Fallar en silencio con nombre correcto es el peor modo de fallo que hay.
 
 **`hsv_h=0.5` en `entrenar.py`.** Rota el matiz de cada imagen por todo el
 círculo cromático en cada época. Es lo que impide que el modelo vuelva a

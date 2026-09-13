@@ -1,27 +1,22 @@
-import { useEffect, useState } from "react";
-import { getStudentStats } from "../api/client";
 import { BRUT, T } from "../theme/brut";
 import CatalogueScreen from "./CatalogueScreen";
-import type { Figure, StudentStats, User } from "../types";
+import type { Figure, User } from "../types";
 
-/** Inicio del estudiante: su progreso y el catálogo de figuras. */
+/**
+ * Inicio del estudiante: el catálogo de figuras, y nada más.
+ *
+ * Aquí había tres placas con sus cifras —figuras intentadas, completadas,
+ * precisión—, y se quitaron a propósito: el progreso de las actividades es del
+ * docente, que lo ve en su panel. Un niño de primaria con un porcentaje de
+ * acierto en la pantalla de inicio no recibe información, recibe una nota, y
+ * quien la puede interpretar no es él.
+ *
+ * La consecuencia es que esta pantalla ya no pide `GET /students/{id}/stats`,
+ * que además ahora respondería 403: esa ruta pasó a ser solo del docente.
+ */
 export default function StudentHome({ user, figures, figuresError, onSelectFigure }: {
   user: User; figures: Figure[]; figuresError: string; onSelectFigure: (fig: Figure) => void;
 }) {
-  const [stats, setStats] = useState<StudentStats | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    getStudentStats(user.id)
-      .then(data => { if (!cancelled) setStats(data); })
-      .catch(() => { if (!cancelled) setStats(null); });
-    return () => { cancelled = true; };
-  }, [user.id]);
-
-  const total    = stats?.total ?? 0;
-  const passed   = stats?.passed ?? 0;
-  const accuracy = stats ? `${Math.round(stats.accuracy * 100)}%` : "—";
-
   const aviso = {
     padding: "2rem", textAlign: "center" as const, fontSize: 14,
     fontWeight: 600, color: BRUT.ink,
@@ -34,25 +29,6 @@ export default function StudentHome({ user, figures, figuresError, onSelectFigur
           ¡Hola, {user.name.split(" ")[0]}!
         </h2>
         <p style={{ ...T.body(), margin: 0 }}>¿Qué figura quieres armar hoy?</p>
-      </div>
-
-      {/* Cada cifra en su propia placa de color. Las tres son del mismo tipo de
-          dato, así que comparten forma y se distinguen por el color. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-        {[
-          { label: "Figuras intentadas", value: total,    tono: BRUT.info },
-          { label: "Completadas",        value: passed,   tono: BRUT.success },
-          { label: "Precisión",          value: accuracy, tono: BRUT.warning },
-        ].map(({ label, value, tono }) => (
-          <div key={label} style={{
-            padding: "1.25rem", textAlign: "center", ...BRUT.raised(5, tono),
-          }}>
-            <p style={{ ...T.stat(34), margin: 0 }}>{value}</p>
-            <p style={{ ...T.eyebrow(BRUT.ink), margin: "6px 0 0", fontSize: 10 }}>
-              {label}
-            </p>
-          </div>
-        ))}
       </div>
 
       {figuresError ? (

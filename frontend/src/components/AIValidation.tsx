@@ -172,8 +172,16 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
   if (!result) return null;
 
   const ok = result.match;
+  // El detector no vio Tangram suficiente como para juzgar nada. No es lo mismo
+  // que una figura mal armada, y confundirlos es lo que hacía esta pantalla:
+  // con 2 fichas de 7 detectadas mostraba «Ninguna ficha encima de otra: Bien»,
+  // «Sin espacios vacíos: Bien» y un 68% de parecido. Ninguna de esas tres cosas
+  // se había comprobado.
+  const fotoIlegible = result.detection_ok === false;
+  const vistoPct = `${Math.round((result.coverage ?? 0) * 100)}%`;
+
   const checks = result.checks;
-  const filas = checks ? filasDeRevision(checks) : [];
+  const filas = checks && !fotoIlegible ? filasDeRevision(checks) : [];
 
   // Un polígono necesita al menos 3 vértices; con menos no hay nada que pintar.
   // Se queda vacío cuando el detector no vio ninguna ficha, y entonces la
@@ -195,7 +203,11 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
   // porcentaje alto y no entiende por qué no se la dan por buena.
   const enEspejo = Boolean(checks?.shape.mirrored) && result.iou_score >= 0.6;
 
-  const tono = ok ? BRUT.success : encuadreMal ? BRUT.info : BRUT.warning;
+  // Los dos son «la foto no sirve», no «tu figura está mal», y comparten
+  // tratamiento: azul, y la acción es repetir la toma.
+  const problemaDeFoto = encuadreMal || fotoIlegible;
+
+  const tono = ok ? BRUT.success : problemaDeFoto ? BRUT.info : BRUT.warning;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -205,7 +217,7 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
           una figura no ha cometido un error, está a mitad de camino. */}
       <div style={{ padding: "1.5rem", textAlign: "center", ...BRUT.raised(7, tono) }}>
         <p style={{ ...T.display(26), margin: 0 }}>
-          {ok ? "¡Lo lograste!" : encuadreMal ? "Repite la foto" : "¡Casi lo tienes!"}
+          {ok ? "¡Lo lograste!" : problemaDeFoto ? "Repite la foto" : "¡Casi lo tienes!"}
         </p>
         <p style={{ margin: "8px 0 0", fontSize: 13, fontWeight: 600, color: BRUT.ink }}>
           Figura objetivo: {result.figure_detected} · {result.pieces_used} de 7 fichas detectadas
@@ -235,7 +247,23 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
 
       {/* Va antes que cualquier corrección del armado: todo lo que venga después
           se midió sobre una foto que no sirve. */}
-      {encuadreMal && (
+      {fotoIlegible && (
+        <div style={{ padding: "16px 18px", ...BRUT.inset() }}>
+          <p style={{ ...T.eyebrow(BRUT.ink), fontSize: 10, margin: "0 0 8px" }}>
+            No pude ver tus fichas
+          </p>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: BRUT.ink }}>
+            Del Tangram solo se reconoció el {vistoPct}. Con tan poco no se puede
+            revisar la figura: no se sabe si está bien o mal armada.
+          </p>
+          <p style={{ margin: "7px 0 0", fontSize: 13, fontWeight: 700, color: BRUT.ink }}>
+            No muevas las fichas. Revisa la luz, que el fondo sea liso y que no
+            queden manos en la toma, y repite la foto.
+          </p>
+        </div>
+      )}
+
+      {encuadreMal && !fotoIlegible && (
         <div style={{ padding: "16px 18px", ...BRUT.inset() }}>
           <p style={{ ...T.eyebrow(BRUT.ink), fontSize: 10, margin: "0 0 8px" }}>
             Es la foto, no tu figura

@@ -3,8 +3,11 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView,
   ActivityIndicator, KeyboardAvoidingView, Platform,
 } from "react-native";
-import { getApiUrl, setApiUrl, normalizeUrl, DEFAULT_API_URL } from "../api/config";
-import { testConnection } from "../api/client";
+import {
+  atajosDeRed, getApiUrl, setApiUrl, normalizeUrl, nombreDeHost, DEFAULT_API_URL,
+} from "../api/config";
+import type { RedConocida } from "../api/config";
+import { buscarServidor, testConnection } from "../api/client";
 import type { HealthStatus } from "../api/client";
 import Icon from "../components/Icon";
 import { Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton } from "../components/ui";
@@ -14,8 +17,15 @@ import { C, S, F, TAP, SAFE_TOP, SAFE_BOTTOM, shout, inset, flat } from "../them
  * Permite cambiar la dirección del servidor sin recompilar la app.
  * Es necesario porque la IP de la PC cambia según la red (casa, universidad,
  * hotspot del celular).
+ *
+ * Escribir la IP a mano es el último recurso, no el camino normal. Encima del
+ * campo están los **atajos de red**: las direcciones horneadas en el APK y las
+ * que ya se usaron alguna vez, a un toque cada una. Y debajo, la búsqueda
+ * automática, que sondea todas y se queda con la que conteste —lo mismo que
+ * hace la app al arrancar, aquí a mano por si se cambió de red con la app ya
+ * abierta—.
  */
-export default function SettingsScreen({ onClose, onChangePin }: {
+export default function SettingsScreen({ onClose, onChangePin, onVerRecorrido }: {
   onClose: () => void;
   /**
    * Solo llega con la sesión abierta. Esta misma pantalla se abre desde el
@@ -23,17 +33,80 @@ export default function SettingsScreen({ onClose, onChangePin }: {
    * entrar—, y allá no hay ninguna cuenta a la que cambiarle la clave.
    */
   onChangePin?: () => void;
+  /**
+   * Repetir el recorrido de bienvenida. Como `onChangePin`, solo llega con la
+   * sesión abierta: desde el ingreso no hay ninguna app que recorrer todavía.
+   *
+   * Que se pueda repetir no es un extra. El recorrido se ve una vez, el primer
+   * día, que es justo el día en que el niño está pendiente de otras cosas; sin
+   * una forma de volver a verlo, lo que se explicó ahí se pierde para siempre.
+   */
+  onVerRecorrido?: () => void;
 }) {
   const [url,     setUrl]     = useState(getApiUrl());
   const [testing, setTesting] = useState(false);
   const [health,  setHealth]  = useState<HealthStatus | null>(null);
   const [error,   setError]   = useState("");
   const [saved,   setSaved]   = useState(false);
+  const [buscando, setBuscando] = useState(false);
+  /**
+   * Los atajos son estado y no una lectura suelta: guardar una dirección nueva
+   * la añade al historial, y entonces tiene que aparecer aquí sin salir de la
+   * pantalla.
+   */
+  const [atajos,  setAtajos]  = useState<RedConocida[]>(() => atajosDeRed());
 
   /** Cualquier edición invalida el resultado que hubiera en pantalla. */
   function edit(next: string) {
     setUrl(next);
     setHealth(null); setError(""); setSaved(false);
+  }
+
+  /**
+   * Un toque en un atajo: la guarda y la prueba de una vez.
+   *
+   * Guardar antes de probar es a propósito. Es el gesto de «me acabo de mudar
+   * de red»: si el backend todavía no está encendido, la prueba fallará, pero
+   * la dirección ya queda puesta y solo hay que volver a probar.
+   */
+  async function aplicar(destino: string) {
+    if (testing || buscando) return;
+    const clean = await setApiUrl(destino);
+    setUrl(clean); setError(""); setHealth(null); setSaved(true);
+    setAtajos(atajosDeRed());
+    setTesting(true);
+    try {
+      setHealth(await testConnection(clean));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error desconocido");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  /** Sondea todas las direcciones conocidas y adopta la que conteste. */
+  async function handleBuscar() {
+    if (testing || buscando) return;
+    setError(""); setHealth(null); setSaved(false); setBuscando(true);
+    try {
+      const hallado = await buscarServidor();
+      if (!hallado) {
+        setError(
+          "Ninguna de las direcciones conocidas contestó. Comprueba que el " +
+          "backend esté corriendo y que estés en el mismo wifi que la PC; si " +
+          "la IP es nueva, escríbela abajo."
+        );
+        return;
+      }
+      setUrl(hallado.url);
+      setHealth(hallado.health);
+      setSaved(true);
+      setAtajos(atajosDeRed());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error desconocido");
+    } finally {
+      setBuscando(false);
+    }
   }
 
   async function handleTest() {
@@ -63,6 +136,7 @@ export default function SettingsScreen({ onClose, onChangePin }: {
     }
     const clean = await setApiUrl(url);
     setUrl(clean);
+    setAtajos(atajosDeRed());
     setError("");
     setSaved(true);
   }
@@ -92,12 +166,49 @@ export default function SettingsScreen({ onClose, onChangePin }: {
         </View>
 
         <Text style={s.help}>
-          Escribe la dirección del computador donde corre el backend. En Windows
-          la obtienes con <Text style={s.code}>ipconfig</Text>, en la Dirección
-          IPv4 del wifi.
+          La app busca el servidor sola cada vez que arranca. Si cambiaste de red
+          con la app abierta, toca la red de abajo o búscalo otra vez.
         </Text>
 
-        <Eyebrow color={C.ink} style={s.label}>Dirección</Eyebrow>
+        {atajos.length > 0 && (
+          <>
+            <Eyebrow color={C.ink} style={s.label}>Mis redes</Eyebrow>
+            {/* Cada red es una placa que se toca: guarda la dirección y la
+                prueba de una vez. La que está en uso va en color, que es lo
+                único que hace falta para saber dónde se está. */}
+            <View style={s.chips}>
+              {atajos.map(red => {
+                const activa = red.url === normalizeUrl(url);
+                return (
+                  <TouchableOpacity
+                    key={red.url} onPress={() => void aplicar(red.url)}
+                    style={[s.chip, flat(activa ? C.accent : C.card, 2)]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: activa }}
+                    accessibilityLabel={`Usar ${red.etiqueta}: ${nombreDeHost(red.url)}`}
+                  >
+                    <Text style={s.chipTitle}>{red.etiqueta}</Text>
+                    <Text style={s.chipUrl}>{nombreDeHost(red.url)}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        <View style={s.gap}>
+          <SecondaryButton
+            label={buscando ? "Buscando…" : "Buscar el servidor en la red"}
+            icon="signal" onPress={handleBuscar}
+          />
+        </View>
+
+        <Eyebrow color={C.ink} style={s.label}>Escribirla a mano</Eyebrow>
+        <Text style={s.help}>
+          Solo si la IP es nueva. En Windows la obtienes con{" "}
+          <Text style={s.code}>ipconfig</Text>, en la Dirección IPv4 del wifi.
+          Al guardarla queda en «Mis redes» y la app la volverá a probar sola.
+        </Text>
         {/* El campo es un hueco: fondo más oscuro que el de alrededor y su
             filete. Un hueco no proyecta sombra, y eso es lo que lo distingue
             de un botón, que sí la tiene. */}
@@ -116,7 +227,7 @@ export default function SettingsScreen({ onClose, onChangePin }: {
             icon="signal" onPress={handleTest}
           />
         </View>
-        {testing && <ActivityIndicator color={C.ink} style={s.spin} />}
+        {(testing || buscando) && <ActivityIndicator color={C.ink} style={s.spin} />}
 
         {/* El estado va en color, con el icono y la palabra al lado: tres
             canales para lo mismo, de modo que ninguno sea imprescindible. */}
@@ -214,10 +325,20 @@ export default function SettingsScreen({ onClose, onChangePin }: {
         {/* Todo lo de arriba es del servidor; esto es de la cuenta. Va aparte y
             al final porque son dos asuntos distintos que solo comparten el ser
             «ajustes», y porque la dirección se toca a diario y la clave no. */}
-        {onChangePin && (
+        {(onChangePin || onVerRecorrido) && (
           <View style={s.cuenta}>
             <Eyebrow color={C.ink} style={s.label}>Mi cuenta</Eyebrow>
-            <SecondaryButton label="Cambiar mi clave" icon="gear" onPress={onChangePin} />
+            {onChangePin && (
+              <SecondaryButton label="Cambiar mi clave" icon="gear" onPress={onChangePin} />
+            )}
+            {onVerRecorrido && (
+              <View style={s.cuentaExtra}>
+                <SecondaryButton
+                  label="Ver el recorrido otra vez" icon="layers"
+                  onPress={onVerRecorrido}
+                />
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -252,6 +373,12 @@ const s = StyleSheet.create({
   help:      { fontFamily: F.regular, fontSize: 14, lineHeight: 21, color: C.muted },
   label:     { marginTop: S.xl, marginBottom: 9 },
 
+  chips:     { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  chip:      { paddingVertical: 10, paddingHorizontal: 14, minHeight: TAP.min,
+               justifyContent: "center" },
+  chipTitle: { fontFamily: F.bold, fontSize: 14, color: C.ink },
+  chipUrl:   { fontFamily: F.mono, fontSize: 11, color: C.ink, marginTop: 2 },
+
   inputBox:  { height: 58, justifyContent: "center", paddingHorizontal: 16 },
   input:     { fontFamily: F.mono, fontSize: 16, color: C.ink, padding: 0 },
 
@@ -276,6 +403,7 @@ const s = StyleSheet.create({
                textAlign: "center", marginTop: 12 },
 
   cuenta:    { marginTop: S.xxl },
+  cuentaExtra:{ marginTop: S.md },
 
   reset:     { height: TAP.control, alignItems: "center", justifyContent: "center",
                marginTop: S.lg },

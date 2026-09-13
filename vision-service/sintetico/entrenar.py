@@ -28,6 +28,64 @@ import argparse
 from pathlib import Path
 
 
+def _exigir_gpu(device: str) -> None:
+    """Para en seco si se pidio GPU y no la hay.
+
+    En Colab el entorno arranca en CPU por defecto y `nvidia-smi` no existe. Sin
+    esta comprobacion Ultralytics cae a CPU sin decir nada y el entrenamiento,
+    que en una T4 son ~2 h, pasa a ser de varios dias. Se descubre a la hora.
+    """
+    if str(device).lower() in {"cpu", "mps"}:
+        return
+    import torch
+    if not torch.cuda.is_available():
+        raise SystemExit(
+            "Pediste --device %s pero PyTorch no ve ninguna GPU (torch.cuda no "
+            "esta disponible).\n"
+            "  · En Colab: Entorno de ejecucion -> Cambiar tipo de entorno -> GPU (T4).\n"
+            "  · Si de verdad quieres CPU, pon --device cpu y baja el dataset a "
+            "unos cientos de imagenes: 6000 x 100 epocas en 2 nucleos son dias."
+            % device
+        )
+
+
+def _exigir_checkpoint_valido(ultimo: Path, datos: Path) -> None:
+    """Comprueba que `last.pt` se pueda reanudar y sea de ESTE dataset.
+
+    Ultralytics, ante un checkpoint sin estado de optimizador, avisa por consola
+    y **empieza un entrenamiento nuevo**; y si se le llama sin `data`, ese
+    entrenamiento nuevo usa su dataset por defecto, `coco8-seg`. El resultado es
+    un best.pt entrenado sobre ocho fotos de personas y perros, con nombre de
+    Tangram y todas las metricas en cero. Ya paso una vez: por eso esta funcion.
+    """
+    if not ultimo.exists():
+        raise SystemExit(
+            f"No hay checkpoint en {ultimo}.\n"
+            "Quita --reanudar y empieza el entrenamiento desde el principio."
+        )
+
+    import torch
+    ckpt = torch.load(ultimo, map_location="cpu", weights_only=False)
+
+    if ckpt.get("epoch", -1) < 0 or ckpt.get("optimizer") is None:
+        raise SystemExit(
+            f"{ultimo} no es reanudable: no lleva estado de optimizador ni de "
+            "epoca (es un checkpoint ya terminado, al que Ultralytics le quito el "
+            "optimizador al cerrar).\n"
+            "Si ese entrenamiento termino, usalo como esta. Si quieres uno nuevo, "
+            "cambia --nombre. Lo que NO hay que hacer es reanudarlo: Ultralytics "
+            "se pondria a entrenar desde cero sobre coco8-seg."
+        )
+
+    previo = (ckpt.get("train_args") or {}).get("data")
+    if previo and Path(str(previo)).name != datos.name:
+        raise SystemExit(
+            f"{ultimo} se entreno con `{previo}`, no con `{datos}`.\n"
+            "Reanudar mezclaria dos datasets distintos. Cambia --nombre para "
+            "abrir una corrida limpia."
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -41,6 +99,13 @@ def main() -> None:
                     help="'0' para GPU, 'cpu' para procesador")
     ap.add_argument("--salida", default="entrenamientos")
     ap.add_argument("--nombre", default="tangram_formas")
+    ap.add_argument("--patience", type=int, default=25,
+                    help="epocas sin mejora antes de parar")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="procesos de carga de datos; en Colab (2 vCPU) pon 2")
+    ap.add_argument("--reanudar", action="store_true",
+                    help="continua desde el last.pt de ESTA corrida, "
+                         "comprobando antes que sea reanudable y sea del mismo dataset")
     args = ap.parse_args()
 
     from ultralytics import YOLO
@@ -49,9 +114,28 @@ def main() -> None:
     if not datos.exists():
         raise SystemExit(f"No encuentro {datos}. Genera antes el dataset.")
 
-    modelo = YOLO(args.modelo)
+    _exigir_gpu(args.device)
+
+    salida = Path(args.salida).resolve()
+    ultimo = salida / args.nombre / "weights" / "last.pt"
+    if args.reanudar:
+        _exigir_checkpoint_valido(ultimo, datos)
+        print(f"Reanudando desde {ultimo}")
+        modelo = YOLO(str(ultimo))
+    else:
+        if ultimo.exists():
+            raise SystemExit(
+                f"Ya hay una corrida en {ultimo.parent}.\n"
+                "  · para continuarla:   anade --reanudar\n"
+                "  · para empezar otra:  cambia --nombre, o borra esa carpeta.\n"
+                "Se para aqui a proposito: sobrescribirla en silencio es como se "
+                "pierden entrenamientos de tres horas."
+            )
+        modelo = YOLO(args.modelo)
+
     modelo.train(
         data=str(datos),
+        resume=args.reanudar,
         epochs=args.epocas,
         imgsz=args.imgsz,
         batch=args.batch,
@@ -81,7 +165,8 @@ def main() -> None:
         mosaic=0.3,
         close_mosaic=10,  # las últimas 10 épocas, sin mosaico: imágenes enteras
 
-        patience=25,
+        patience=args.patience,
+        workers=args.workers,
         plots=True,
         verbose=True,
     )

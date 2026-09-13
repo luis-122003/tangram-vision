@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
@@ -124,6 +125,10 @@ def resolver_taxonomia(nombres: Iterable[str]) -> dict[str, str]:
 
 # --- Geometria canonica (Tangram inscrito en el cuadrado unitario) -----------
 # Sirve para pruebas y para dibujar la solucion. Coordenadas en [0,1]x[0,1].
+#
+# La cuadricula interna es de 4 x 4. En particular, el romboide no es un
+# cuadrado girado: sus lados miden 2 y sqrt(2) celdas, y sus angulos son
+# 45/135 grados. La disposicion siguiente tesela exactamente el cuadrado.
 
 def _p(*pts) -> np.ndarray:
     return np.asarray(pts, dtype=np.float64) / 4.0
@@ -133,11 +138,24 @@ PIEZAS_CANONICAS: list[tuple[str, np.ndarray]] = [
     (TRIANGULO_GRANDE, _p((0, 0), (4, 0), (2, 2))),
     (TRIANGULO_GRANDE, _p((0, 0), (2, 2), (0, 4))),
     (TRIANGULO_MEDIANO, _p((4, 2), (4, 4), (2, 4))),
-    (TRIANGULO_PEQUENO, _p((0, 4), (2, 4), (1, 3))),
+    (TRIANGULO_PEQUENO, _p((3, 3), (1, 3), (2, 2))),
     (TRIANGULO_PEQUENO, _p((3, 1), (4, 0), (4, 2))),
-    (CUADRADO, _p((1, 3), (2, 2), (3, 3), (2, 4))),
-    (ROMBOIDE, _p((2, 2), (3, 1), (4, 2), (3, 3))),
+    (CUADRADO, _p((4, 2), (3, 3), (2, 2), (3, 1))),
+    (ROMBOIDE, _p((3, 3), (2, 4), (0, 4), (1, 3))),
 ]
+
+
+def _angulos_interiores(poly: np.ndarray) -> np.ndarray:
+    """Los angulos interiores de un poligono convexo, en grados."""
+    angulos = []
+    for i, vertice in enumerate(poly):
+        anterior = poly[(i - 1) % len(poly)] - vertice
+        siguiente = poly[(i + 1) % len(poly)] - vertice
+        coseno = np.dot(anterior, siguiente) / (
+            np.linalg.norm(anterior) * np.linalg.norm(siguiente)
+        )
+        angulos.append(math.degrees(math.acos(float(np.clip(coseno, -1.0, 1.0)))))
+    return np.asarray(angulos)
 
 # ============================================================================
 # 2. Umbrales (calibrables)
@@ -147,6 +165,9 @@ UMBRAL_IOU_CORRECTA = 0.85   # >= esto: la figura se da por correcta
 UMBRAL_IOU_CASI = 0.70       # entre casi y correcta: "vas bien, ajusta"
 UMBRAL_SOLAPE = 0.05         # fraccion de area solapada tolerada entre fichas
 UMBRAL_HUECO = 0.04          # fraccion de hueco interior tolerada
+#: Fraccion del Tangram que hay que haber VISTO para poder calificar la figura.
+#: Ver `cobertura_detectada` para por que se mide asi y de donde sale el 0.80.
+UMBRAL_COBERTURA = 0.80
 UMBRAL_AREA = 0.45           # desviacion relativa tolerada en el area de una ficha
 
 
@@ -202,6 +223,42 @@ def _aplicar_umbrales_efectivos() -> tuple[float, float]:
 # ============================================================================
 # 3. Estructuras de datos
 # ============================================================================
+
+
+def cobertura_detectada(detecciones: Sequence["Deteccion"]) -> float:
+    """Que fraccion de un Tangram entero se alcanzo a ver, medida en area.
+
+    Devuelve 1.0 cuando lo detectado suma el area de las siete fichas.
+
+    Por que el area y no el numero de fichas
+    ----------------------------------------
+    Porque el detector se equivoca de clase de una forma muy concreta: **lee el
+    cuadrado y el romboide como dos triangulos pequenos**. Y no es un capricho
+    suyo, es geometria del Tangram --el cuadrado y el romboide tienen
+    exactamente el area de dos triangulos pequenos y se pueden teselar con
+    ellos--, asi que en el contorno de una figura armada esa lectura es
+    literalmente indistinguible.
+
+    Medido sobre las 114 fotos reales, esa confusion aparece en el 96% de ellas:
+    faltan 0.49 cuadrados y 0.51 romboides de media, y sobran 1.54 triangulos
+    pequenos. Un inventario por clases da esas fotos por incompletas; una suma
+    de areas no, porque **la confusion conserva el area**: un cuadrado son 2
+    unidades y los dos triangulos que lo sustituyen son 1+1.
+
+    Y sigue detectando lo que si importa. Con el detector por color sobre un
+    Tangram de otros colores, la cobertura media es 0.22 y la mediana 0.125
+    --dos fichas de siete--; con el detector por forma, la media es 1.03 y la
+    **peor de las 114 fotos, 0.875**. Por eso el umbral esta en 0.80: deja pasar
+    las 114 y detiene 109 de las 114 del otro caso.
+
+    Se cuenta cada deteccion una vez. Quien llame debe haber quitado antes los
+    duplicados (`pipeline.descartar_duplicados`), o dos cajas sobre la misma
+    ficha contaran dos veces y la cobertura saldra inflada.
+    """
+    if not detecciones:
+        return 0.0
+    unidades = sum(AREA_RELATIVA.get(d.pieza, 0.0) for d in detecciones)
+    return unidades / AREA_TOTAL_UNIDADES
 
 
 @dataclass
@@ -277,6 +334,12 @@ class ResultadoValidacion:
     huecos: ResultadoHuecos
     conectividad: ResultadoConectividad
     comparacion: Comparacion | None
+    #: Fraccion de un Tangram entero que se alcanzo a ver (ver `cobertura_detectada`).
+    cobertura: float = 1.0
+    #: False cuando se vio tan poco que no hay nada que calificar. Es la
+    #: diferencia entre «tu figura esta mal» y «no pude ver tus fichas», que
+    #: para un nino de ocho anos no son ni parecidas.
+    deteccion_suficiente: bool = True
     areas_sospechosas: list[str] = field(default_factory=list)
     mensajes: list[str] = field(default_factory=list)
     #: Contorno exterior de la figura armada, en pixeles de la imagen, tal como
@@ -297,6 +360,8 @@ class ResultadoValidacion:
         return {
             "es_correcta": self.es_correcta,
             "puntaje": round(self.puntaje, 4),
+            "cobertura": round(self.cobertura, 4),
+            "deteccion_suficiente": self.deteccion_suficiente,
             "figura": self.figura,
             "inventario": {
                 "completo": self.inventario.completo,
@@ -658,6 +723,7 @@ def construir_resultado(
     comparacion: Comparacion | None,
     exigir_inventario: bool = True,
     avisos: Sequence[str] = (),
+    cobertura: float = 1.0,
 ) -> ResultadoValidacion:
     """Junta los cinco analisis en un veredicto y en mensajes para el estudiante.
 
@@ -723,9 +789,32 @@ def construir_resultado(
                 "volteado, dale la vuelta."
             )
 
+    # --- Cuando no se vio lo suficiente -------------------------------------
+    #
+    # Con media figura vista, las demas comprobaciones salen «bien» por vacuidad
+    # --dos fichas sueltas nunca se pisan entre si, ni dejan huecos interiores--
+    # y el parecido se calcula sobre una silueta incompleta que la normalizacion
+    # por area infla hasta el tamano del modelo. Se vio exactamente eso en una
+    # foto real: 2 fichas de 7 detectadas, y la pantalla mostraba «Ninguna ficha
+    # encima de otra: Bien», «Sin espacios vacios: Bien» y un 68% de parecido.
+    # Nada de eso se habia comprobado.
+    #
+    # Asi que cuando no hay material suficiente no se afina el diagnostico: se
+    # sustituye. Un mensaje honesto sobre la foto vale mas que cinco veredictos
+    # sobre un armado que nadie llego a ver.
+    suficiente = cobertura >= UMBRAL_COBERTURA
+    if not suficiente:
+        mensajes = list(avisos) + [
+            f"No se alcanzo a ver la figura completa: solo se reconocio el "
+            f"{cobertura:.0%} de las fichas. No es que este mal armada, es que "
+            "la foto no deja verla. Revisa la luz, el fondo y que no haya manos "
+            "en la toma, y vuelve a intentarlo.",
+        ]
+
     # --- Veredicto ----------------------------------------------------------
     es_correcta = (
-        puntaje >= UMBRAL_IOU_CORRECTA
+        suficiente
+        and puntaje >= UMBRAL_IOU_CORRECTA
         and not solape.hay_solape
         and not huecos.hay_huecos
         and not conectividad.hay_sueltas
@@ -735,6 +824,8 @@ def construir_resultado(
     return ResultadoValidacion(
         es_correcta=es_correcta,
         puntaje=puntaje,
+        cobertura=cobertura,
+        deteccion_suficiente=suficiente,
         figura=nombre,
         inventario=inventario,
         solape=solape,
@@ -761,6 +852,9 @@ def validar_configuracion(
     nombre = figura_objetivo.get("name", figura_objetivo.get("slug", "?"))
 
     inventario = validar_inventario(detecciones, taxonomia)
+    # Despues de `validar_inventario`, cada deteccion ya lleva resuelta su ficha
+    # canonica en `.pieza`, que es lo que la cobertura necesita para pesar areas.
+    cobertura = cobertura_detectada(detecciones)
 
     avisos: list[str] = []
     comparacion = None
@@ -808,7 +902,7 @@ def validar_configuracion(
 
     resultado = construir_resultado(
         nombre, inventario, solape, huecos, conectividad, sospechosas,
-        comparacion, exigir_inventario, avisos,
+        comparacion, exigir_inventario, avisos, cobertura,
     )
     # La silueta viaja de vuelta para que la API no la vuelva a calcular: es el
     # mismo contorno con el que se acaba de medir la IoU.
@@ -828,7 +922,8 @@ def cargar_figuras(path: str) -> dict[str, dict]:
     return {f["slug"]: f for f in datos}
 
 
-def desde_ultralytics(resultado, taxonomia: dict[str, str] | None = None) -> list[Deteccion]:
+def desde_ultralytics(resultado, taxonomia: dict[str, str] | None = None,
+                      reparar: bool = True) -> list[Deteccion]:
     """Convierte un Results de YOLOv8-seg en una lista de Deteccion.
 
         r = modelo.predict(imagen)[0]
@@ -851,7 +946,182 @@ def desde_ultralytics(resultado, taxonomia: dict[str, str] | None = None) -> lis
         taxonomia = resolver_taxonomia(d.clase for d in detecciones)
     for d in detecciones:
         d.pieza = taxonomia[d.clase]
+    if reparar:
+        # Sin esto, el detector devuelve 8.67 fichas de media donde hay 7 y el
+        # inventario no cuadra en ninguna foto. Ver `reparar_cuadrilateros`.
+        detecciones = reparar_cuadrilateros(detecciones, taxonomia)
     return detecciones
+
+
+# --- Reparacion geometrica de las fichas de cuatro lados ---------------------
+
+#: Angulo maximo, en grados, por debajo del cual un cuadrilatero se da por
+#: cuadrado. El cuadrado tiene los cuatro angulos en 90; el romboide, 45 y 135.
+#: 110 cae comodamente entre los dos y aguanta el ruido de las mascaras reales.
+UMBRAL_ANGULO_CUADRADO = 110.0
+
+#: Area del casco convexo de dos triangulos dividida por la suma de sus areas.
+#: Si esta cerca de 1, los dos comparten una arista entera y forman un
+#: cuadrilatero; si se pasa, estan sueltos o solo se tocan por un vertice.
+TOLERANCIA_FUSION = 1.15
+
+#: Distancia entre centroides, en fracciones de la raiz del area, por debajo de
+#: la cual dos cuadrilateros se consideran la misma ficha detectada dos veces.
+UMBRAL_CENTROIDE_DUPLICADO = 0.35
+
+
+def _angulos_del_cuadrilatero(poly: np.ndarray) -> np.ndarray | None:
+    """Los angulos interiores del cuadrilatero que mejor aproxima a `poly`.
+
+    Las mascaras que devuelve YOLO son contornos dentados de decenas de puntos,
+    asi que hay que simplificarlas antes de medir. Se prueban varias tolerancias
+    porque una sola no vale para mascaras de distinto tamano y ruido.
+    """
+    contorno = np.asarray(poly, dtype=np.float32).reshape(-1, 1, 2)
+    perimetro = cv2.arcLength(contorno, True)
+    for eps in (0.02, 0.03, 0.04, 0.05, 0.06):
+        aprox = cv2.approxPolyDP(contorno, eps * perimetro, True).reshape(-1, 2)
+        if len(aprox) == 4:
+            return _angulos_interiores(aprox.astype(np.float64))
+    return None
+
+
+def clasificar_cuadrilatero(poly: np.ndarray) -> str | None:
+    """CUADRADO o ROMBOIDE midiendo, no preguntandole al detector.
+
+    El detector entrenado sobre imagenes sinteticas confunde estas dos fichas a
+    la mitad: 0.50 de mAP50 en ambas, frente a 0.97-0.99 en los tres triangulos.
+    Los angulos, en cambio, no se prestan a discusion. Devuelve None si la
+    mascara no se deja aproximar por un cuadrilatero.
+    """
+    angulos = _angulos_del_cuadrilatero(poly)
+    if angulos is None:
+        return None
+    return CUADRADO if float(np.max(angulos)) < UMBRAL_ANGULO_CUADRADO else ROMBOIDE
+
+
+def reparar_cuadrilateros(
+    detecciones: Sequence["Deteccion"],
+    taxonomia: dict[str, str] | None = None,
+) -> list["Deteccion"]:
+    """Arregla los dos fallos que el detector comete con las fichas de 4 lados.
+
+    Medido el 6 de septiembre de 2026 sobre las 112 fotos reales de
+    `figuras_armadas_unet` (las 114 menos las dos apartadas por estar mal
+    etiquetadas; ver `_excluidas/MOTIVO.txt`), en una sola corrida y a 640 px:
+
+        fichas detectadas    8.62 -> 7.09   (el Tangram tiene 7)
+        fotos con las 7         1 -> 103    de 112
+        inventario correcto     0 ->  98    de 112
+        IoU de silueta      0.968 -> 0.969  (no se resiente)
+
+    Dos reglas, y ninguna toca el modelo:
+
+    1. **El romboide sale partido en dos.** El detector lo corta por su diagonal
+       y devuelve dos triangulos pequenos con confianza alta (0.85-0.95), no
+       dudando. Dos `TRIANGULO_PEQUENO` cuyo casco convexo mide lo que suman los
+       dos comparten una arista entera, asi que se funden en el cuadrilatero que
+       forman. Es geometria, no heuristica: si estuvieran sueltos, el casco seria
+       mayor que la suma y no se tocan.
+
+    2. **El cuadrado sale por duplicado.** Sobre la misma ficha aparecen un
+       `square` y un `parallelogram` con confianzas de moneda al aire
+       (0.48 y 0.49). Se conserva el de mas confianza y se le pone la clase que
+       digan sus angulos.
+
+    Lo que esto **no** puede arreglar es una ficha que el detector no vio: de ahi
+    las 14 fotos de 112 en las que el inventario sigue sin cuadrar.
+    """
+    detecciones = list(detecciones)
+    if not detecciones:
+        return []
+
+    if taxonomia is None:
+        taxonomia = resolver_taxonomia(d.clase for d in detecciones)
+    inversa: dict[str, str] = {}
+    for nombre_clase, pieza in taxonomia.items():
+        inversa.setdefault(pieza, nombre_clase)
+    for d in detecciones:
+        if not d.pieza:
+            d.pieza = taxonomia.get(d.clase, d.clase)
+
+    def _area(poly: np.ndarray) -> float:
+        return abs(float(cv2.contourArea(np.asarray(poly, dtype=np.float32))))
+
+    def _nueva(pieza: str, poly: np.ndarray, confianza: float) -> "Deteccion":
+        d = Deteccion(clase=inversa.get(pieza, pieza), poligono=poly,
+                      confianza=confianza)
+        d.pieza = pieza
+        return d
+
+    # 1) Fusionar las parejas de triangulos pequenos que forman un cuadrilatero.
+    pequenos = [i for i, d in enumerate(detecciones) if d.pieza == TRIANGULO_PEQUENO]
+
+    # En una foto real hay cuatro `TRIANGULO_PEQUENO`: los dos de verdad y las
+    # dos mitades del romboide partido. Emparejarlos en el orden en que llegaron
+    # puede casar una mitad con un pequeno legitimo y fabricar un cuadrilatero
+    # que no existe, destruyendo de paso una ficha buena. Por eso se calculan
+    # todas las parejas viables primero y se consumen de la mas ajustada a la
+    # menos: la pareja cuyo casco convexo mide lo mas parecido a la suma de sus
+    # dos mitades es la que de verdad comparte una arista entera.
+    candidatas: list[tuple[float, int, int, np.ndarray, str]] = []
+    for i, j in itertools.combinations(pequenos, 2):
+        a, b = detecciones[i].poligono, detecciones[j].poligono
+        casco = cv2.convexHull(
+            np.vstack([a, b]).astype(np.float32)
+        ).reshape(-1, 2).astype(np.float64)
+        suma = _area(a) + _area(b)
+        if suma <= 0:
+            continue
+        holgura = _area(casco) / suma
+        if holgura > TOLERANCIA_FUSION:
+            continue
+        pieza = clasificar_cuadrilatero(casco)
+        if pieza is None:
+            continue
+        candidatas.append((holgura, i, j, casco, pieza))
+    candidatas.sort(key=lambda c: c[0])
+
+    # Un Tangram tiene exactamente dos triangulos pequenos, y en una figura
+    # armada pueden perfectamente estar pegados por una arista formando un
+    # cuadrado. Fusionarlos ahi seria destruir dos fichas buenas para inventar
+    # una que no existe. Por eso solo se funde mientras SOBREN pequenos: si ya
+    # quedan los dos del inventario, se para.
+    minimo = INVENTARIO_CANONICO.get(TRIANGULO_PEQUENO, 2)
+    fundidos: set[int] = set()
+    nuevos: list["Deteccion"] = []
+    for _holgura, i, j, casco, pieza in candidatas:
+        if len(pequenos) - len(fundidos) <= minimo:
+            break
+        if i in fundidos or j in fundidos:
+            continue
+        fundidos.update((i, j))
+        nuevos.append(_nueva(pieza, casco,
+                             min(detecciones[i].confianza, detecciones[j].confianza)))
+    salida = [d for k, d in enumerate(detecciones) if k not in fundidos] + nuevos
+
+    # 2) Quitar cuadrilateros duplicados y reetiquetar los que queden.
+    cuadrilateros = [k for k, d in enumerate(salida) if d.pieza in (CUADRADO, ROMBOIDE)]
+    sobran: set[int] = set()
+    for i, j in itertools.combinations(cuadrilateros, 2):
+        if i in sobran or j in sobran:
+            continue
+        distancia = float(np.linalg.norm(salida[i].centroide - salida[j].centroide))
+        escala = math.sqrt(max(salida[i].area, salida[j].area, 1.0))
+        if distancia < UMBRAL_CENTROIDE_DUPLICADO * escala:
+            sobran.add(j if salida[i].confianza >= salida[j].confianza else i)
+
+    final: list["Deteccion"] = []
+    for k, d in enumerate(salida):
+        if k in sobran:
+            continue
+        if d.pieza in (CUADRADO, ROMBOIDE):
+            medida = clasificar_cuadrilatero(d.poligono)
+            if medida is not None and medida != d.pieza:
+                d.pieza = medida
+                d.clase = inversa.get(medida, d.clase)
+        final.append(d)
+    return final
 
 
 def quedarse_con_las_mejores(detecciones: Sequence[Deteccion]) -> list[Deteccion]:
@@ -1059,6 +1329,47 @@ def autotest(path_figuras: str | None = None) -> bool:
     check("las 7 fichas cubren el cuadrado unitario", abs(total - 1.0) < 1e-6,
           f"area total {total:.6f}")
 
+    angulos_esperados = {
+        TRIANGULO_GRANDE: (45.0, 45.0, 90.0),
+        TRIANGULO_MEDIANO: (45.0, 45.0, 90.0),
+        TRIANGULO_PEQUENO: (45.0, 45.0, 90.0),
+        CUADRADO: (90.0, 90.0, 90.0, 90.0),
+        ROMBOIDE: (45.0, 45.0, 135.0, 135.0),
+    }
+    for i, (pieza, poly) in enumerate(PIEZAS_CANONICAS, start=1):
+        medidos = tuple(np.sort(_angulos_interiores(poly)).round(4))
+        check(f"angulos de la ficha {i} ({NOMBRE_BONITO[pieza]})",
+              np.allclose(medidos, angulos_esperados[pieza], atol=0.01),
+              f"medidos {medidos}")
+
+    romboide = next(poly for pieza, poly in PIEZAS_CANONICAS if pieza == ROMBOIDE)
+    lados_romboide = np.linalg.norm(np.roll(romboide, -1, axis=0) - romboide, axis=1)
+    cortos, largos = np.sort(lados_romboide).reshape(2, 2)
+    check("romboide: dos pares de lados distintos",
+          np.allclose(cortos[0], cortos[1]) and np.allclose(largos[0], largos[1])
+          and not np.isclose(cortos[0], largos[0]),
+          f"lados {np.sort(lados_romboide).round(5)}")
+    check("romboide: lados en proporcion sqrt(2)",
+          np.isclose(largos[0] / cortos[0], math.sqrt(2.0), atol=1e-6),
+          f"proporcion {largos[0] / cortos[0]:.5f}")
+    vertices = np.vstack([poly for _, poly in PIEZAS_CANONICAS])
+    dentro_del_cuadrado = bool(
+        np.all(vertices >= -1e-12) and np.all(vertices <= 1.0 + 1e-12)
+    )
+    check("todas las fichas quedan dentro del cuadrado unitario", dentro_del_cuadrado)
+    solape_canonico_maximo = max(
+        cv2.intersectConvexConvex(a.astype(np.float32), b.astype(np.float32))[0]
+        for i, (_, a) in enumerate(PIEZAS_CANONICAS)
+        for _, b in PIEZAS_CANONICAS[i + 1:]
+    )
+    check("las fichas canonicas tienen cero solape exacto",
+          solape_canonico_maximo < 1e-12,
+          f"interseccion maxima {solape_canonico_maximo:.3g}")
+    check("las fichas canonicas teselan exactamente el cuadrado",
+          dentro_del_cuadrado and abs(total - 1.0) < 1e-6
+          and solape_canonico_maximo < 1e-12,
+          "area total 1, dentro del cuadrado y sin solapes")
+
     print("\n2) Inventario")
     dets = _piezas_como_detecciones(inv7)
     check("Tangram completo -> inventario completo", validar_inventario(dets).completo)
@@ -1137,7 +1448,7 @@ def autotest(path_figuras: str | None = None) -> bool:
         peores = [(s, comparar_siluetas(np.asarray(figuras[s]["silhouette"]), casa).iou)
                   for s in slugs]
         peor = max(peores, key=lambda t: t[1])
-        check("Casa contra las otras 13 figuras -> ninguna la supera",
+        check(f"Casa contra las otras {len(slugs)} figuras -> ninguna la supera",
               peor[1] < UMBRAL_IOU_CORRECTA,
               f"la mas parecida es '{peor[0]}' con IoU={peor[1]:.3f}")
     else:

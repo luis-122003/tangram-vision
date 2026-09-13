@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { login as apiLogin } from "../api/client";
 import { BRUT, T } from "../theme/brut";
+import MaterialsButton from "./MaterialsPanel";
 import Logo from "./Logo";
 import type { User } from "../types";
 
@@ -105,6 +106,12 @@ export default function LoginScreen(
             width: "100%", marginTop: 4, padding: "15px", fontSize: 16,
           }}>{submitting ? "Ingresando…" : "Entrar"}</button>
         </form>
+
+        {/* Se consulta **sin cuenta**: es lo que mira el docente para saber qué
+            repartir, antes de que ningún estudiante tenga la sesión abierta. */}
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <MaterialsButton variant="link" />
+        </div>
 
         <div style={{
           marginTop: 24, padding: "15px 17px", fontSize: 12,

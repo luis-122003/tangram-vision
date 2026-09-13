@@ -172,15 +172,35 @@ estudiante puede corregir.
 ### Catálogo de figuras objetivo
 
 Las figuras viven en la tabla `figures` de MySQL. Cada una guarda su silueta
-de referencia como un polígono normalizado (0..1). Esas siluetas se extrajeron
-del dataset de entrenamiento *FigurasArmadas_YOLOv8* (14 clases) tomando, por
-cada clase, el **polígono medoide** — el contorno más representativo según IoU
-frente a todos los demás ejemplos de esa clase.
+de referencia como un polígono normalizado (0..1). El catálogo tiene **20
+figuras** y vienen de dos sitios distintos:
 
-Se cargan las 14 figuras, pero solo 8 quedan activas por defecto (`enabled`),
-que son aquellas cuya silueta de referencia resultó claramente reconocible:
-Casa, Flecha, Pez, Triángulo, Gato, Interrogación, Persona y Pájaro. Para
-activar el resto basta con actualizar la columna:
+- **14** del dataset de entrenamiento *FigurasArmadas_YOLOv8*, tomando por cada
+  clase el **polígono medoide** — el contorno más representativo según IoU
+  frente a todos los demás ejemplos de esa clase.
+- **6** añadidas el 6 de septiembre de 2026 —Cisne, Conejo sentado, Canguro,
+  Cohete, Vela y Molino—, sacadas de las 112 fotos reales de
+  `figuras_armadas_unet` promediando las máscaras de cada figura tras
+  alinearlas por giro.
+
+De las 20, solo **7 están activas** (`enabled = 1`), y son las que el
+estudiante puede elegir: Triángulo, Cisne, Conejo sentado, Canguro, Cohete,
+Vela y Molino. Son exactamente las figuras que aparecen en las 112 fotos con
+las que se midió el sistema, así que son las únicas cuya corrección tiene
+respaldo experimental. Ofrecer las otras 13 significaba dejar que un estudiante
+eligiera *Casa* y recibiera una evaluación que nadie ha comprobado.
+
+Las 13 inactivas **no se borran**, y el motivo no es la nostalgia: de ellas sale
+la calibración de los umbrales. `tangram_validator.py --calibrar` mide la IoU
+máxima entre dos figuras *distintas* del catálogo sobre las 20 —0,741, `house`
+contra `arrow`— y de ahí salen `MATCH_IOU=0.80` y `CLOSE_IOU=0.75`. Borrarlas
+dejaría esa calibración sin reproducir.
+
+El cambio de activas se aplica con `backend/sql/catalogo-solo-validadas.sql`.
+Editar `figures_seed.json` **no basta** en una instalación ya sembrada: el
+sembrado añade las figuras que faltan pero no toca las que ya están, a
+propósito, para no pisar lo que se haya cambiado desde la base. Para volver a
+ofrecer una figura concreta:
 
 ```sql
 UPDATE figures SET enabled = 1 WHERE slug = 'rabbit';
@@ -475,17 +495,19 @@ MAX_IMAGE_MB=12
 
 **vision-service/.env** — detector y umbrales del validador
 ```
-YOLO_WEIGHTS=models/tangram_piezas_seg_best.pt
-YOLO_CONF=0.35
-# Resolución a la que el detector reescala la foto. Las figuras armadas son
-# grandes, el niño fotografía de lejos y cada ficha queda con pocos píxeles:
-# con los 640 de fábrica se perdían.
-YOLO_IMGSZ=960
+YOLO_WEIGHTS=models/tangram_formas_v2.pt
+YOLO_CONF=0.25
+# Resolución a la que se entrenó el detector. No se sube: agrandar la foto no
+# añade detalle y cambia la escala aparente de las fichas respecto a lo que el
+# modelo vio entrenando.
+YOLO_IMGSZ=640
 
-# Acierto mínimo para dar la figura por correcta (0..1)
-MATCH_IOU=0.75
+# Acierto mínimo para dar la figura por correcta (0..1). Los dos umbrales están
+# por encima de 0.741, que es la mayor confusión entre dos figuras distintas del
+# catálogo; salen de `python tangram_validator.py --calibrar`.
+MATCH_IOU=0.80
 # A partir de aquí se le dice al estudiante "vas bien, ajusta"
-CLOSE_IOU=0.70
+CLOSE_IOU=0.75
 # Si es 0, faltar o sobrar fichas se informa pero no invalida la figura
 REQUIRE_INVENTORY=0
 ```
@@ -496,7 +518,7 @@ petición haría que dos fotos analizadas a la vez se pisaran los umbrales.
 
 El valor de fábrica del validador es `MATCH_IOU=0.85`, que es lo que aguanta el
 catálogo sin confundir una figura con otra (ver `--calibrar`). En el despliegue
-se usa **0.75** y el inventario queda **informativo** por una razón práctica: en
+se usa **0.80** y el inventario queda **informativo** por una razón práctica: en
 fotos reales el detector no recorta las fichas con precisión de píxel y a veces
 pierde alguna por una sombra, y no se le puede reprobar al estudiante un armado
 correcto por un fallo de la cámara. La revisión igual se le muestra: cuando la
@@ -517,8 +539,13 @@ explica que no cuenta en contra.
 | POST   | `/sessions`                | **estudiante**    | Registra el intento (el alumno sale del token) |
 | GET    | `/sessions`                | **docente**       | Historial de todo el curso, paginado           |
 | GET    | `/students/{id}/sessions`  | propio o docente  | Historial de un solo estudiante, paginado      |
-| GET    | `/students/{id}/stats`     | propio o docente  | Total, aprobados, IoU promedio y accuracy      |
+| GET    | `/students/{id}/stats`     | **docente**       | Total, aprobados, IoU promedio y accuracy      |
 | GET    | `/health/metrics`          | **docente**       | Consultas a la base: totales, lentas, errores  |
+| GET    | `/students`                | **docente**       | El curso con el progreso de cada estudiante    |
+| POST   | `/students`                | **docente**       | Alta. La clave la elige el docente o la genera el servidor |
+| PATCH  | `/students/{id}`           | **docente**       | Cambia nombre o correo (la clave, no)          |
+| POST   | `/students/{id}/password/reset` | **docente**  | Clave nueva y cierra sus sesiones abiertas     |
+| DELETE | `/students/{id}`           | **docente**       | Baja, **con todos sus intentos**               |
 
 Los listados devuelven `{ rows, total, limit, offset }` y nunca más de 100 filas,
 por mucho que se pidan.
@@ -548,7 +575,7 @@ Además de `iou_score`, `match` y `feedback`, trae la revisión del validador:
 {
   "match": false,            // la silueta calza, pero hay fichas montadas
   "iou_score": 0.82,
-  "match_threshold": 0.75,
+  "match_threshold": 0.80,
   "checks": {
     "inventory":    { "ok": true,  "counted": 7, "expected": 7 },
     "overlap":      { "ok": false, "fraction": 0.16 },

@@ -38,6 +38,16 @@ mobile/ios/
 *.apk
 *.aab
 
+# ─── Respaldos locales ──────────────────────────────────────────────────────
+# Copias de seguridad hechas a mano antes de un cambio grande (archivo.bak-FECHA).
+# Son útiles en la máquina y no pertenecen al historial: para eso está git, que ya
+# guarda todas las versiones anteriores de cada archivo.
+*.bak
+*.bak-*
+*.orig
+*.old
+*~
+
 # ─── Registros y temporales ─────────────────────────────────────────────────
 *.log
 npm-debug.*
@@ -45,3 +55,6 @@ npm-debug.*
 .claude/settings.local.json
 .DS_Store
 Thumbs.db
+
+# Paquete del dataset sintetico para Colab: se regenera, y lleva un .pt dentro.
+tangram_sintetico.zip

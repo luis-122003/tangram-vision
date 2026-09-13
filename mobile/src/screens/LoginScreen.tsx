@@ -5,8 +5,8 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Svg, { Polygon, Rect } from "react-native-svg";
-import { login, logout } from "../api/client";
-import { getApiUrl } from "../api/config";
+import { buscarServidor, ErrorDeRed, login, logout } from "../api/client";
+import { useApiUrl } from "../api/config";
 import type { User } from "../api/types";
 import Icon from "../components/Icon";
 import { Card, Eyebrow } from "../components/ui";
@@ -36,8 +36,19 @@ const LAST_STUDENT = "tangram.lastStudent";
  * son veinticuatro dibujos a la vez. Por eso las teclas llevan sombra de 3 px y
  * no de 5: a plena longitud, doce sombras seguidas se leen como ruido.
  */
-export default function LoginScreen({ onLogin, onOpenSettings }: {
-  onLogin: (u: User) => void; onOpenSettings: () => void;
+export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }: {
+  /**
+   * Entró. Se devuelve también **la clave que tecleó**, y no por capricho: si
+   * la cuenta viene con la clave temporal del docente, la raíz de la app lleva
+   * al estudiante a cambiarla en el acto, y para eso hace falta la clave de
+   * ahora. Pedírsela otra vez en la pantalla siguiente sería hacerle repetir un
+   * número que la app acaba de recibir.
+   *
+   * No se guarda en ningún sitio: vive en el estado de `App.tsx` hasta que se
+   * completa el cambio, y se borra con él.
+   */
+  onLogin: (u: User, clave: string) => void;
+  onOpenSettings: () => void; onOpenMaterials: () => void;
 }) {
   const { width } = useWindowDimensions();
 
@@ -47,6 +58,12 @@ export default function LoginScreen({ onLogin, onOpenSettings }: {
   const [pin,        setPin]        = useState("");
   const [error,      setError]      = useState("");
   const [submitting, setSubmitting] = useState(false);
+  /** Se está sondeando la red buscando el servidor (ver `entrar`). */
+  const [buscando,   setBuscando]   = useState(false);
+  // La dirección se dibuja desde el hook y no leyéndola una vez: la búsqueda
+  // automática puede reemplazarla mientras esta pantalla está abierta, y aquí
+  // hay que decir a dónde se va a conectar de verdad.
+  const apiUrl = useApiUrl();
 
   useEffect(() => {
     AsyncStorage.getItem(LAST_STUDENT)
@@ -74,31 +91,61 @@ export default function LoginScreen({ onLogin, onOpenSettings }: {
     setError("");
     setSubmitting(true);
     try {
-      const clean = email.trim();
-      // `login` guarda el token de sesión y devuelve ya el usuario.
-      const usuario = await login(clean, pin);
-
-      // Esta app es solo para estudiantes, y el servidor opina lo mismo: el
-      // docente no juega, así que `POST /sessions` le responde 403. Dejarlo
-      // entrar no daba un error visible —el fallo al guardar se tragaba— sino
-      // algo peor: una app que parece funcionar y no anota ni un intento.
-      // Se cierra la sesión que se acaba de abrir, también en el servidor.
-      if (usuario.role !== "student") {
-        await logout();
-        setError("Esta app es para estudiantes. El docente entra por la web.");
-        setPin("");
-        return;
-      }
-
-      await AsyncStorage.setItem(LAST_STUDENT, JSON.stringify({ name: usuario.name, email: clean }))
-        .catch(() => { /* recordar es opcional */ });
-      onLogin(usuario);
+      await entrar(pin);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo entrar.");
       setPin("");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /**
+   * Un intento de ingreso.
+   *
+   * Si falla **por red** —y solo por red: un PIN equivocado no cuenta— se
+   * sondean las otras direcciones conocidas y, si el servidor aparece en una de
+   * ellas, se reintenta una sola vez. Es el caso de siempre: el teléfono se
+   * quedó con la dirección del aula de ayer, o con la de casa. Así la app se
+   * muda de red por su cuenta en vez de mandar a un niño a Ajustes a teclear
+   * una IP.
+   *
+   * La clave se pasa por parámetro porque el reintento la necesita intacta: el
+   * estado se limpia al mostrar el error.
+   */
+  async function entrar(clave: string, reintento = false): Promise<void> {
+    const clean = email.trim();
+    let usuario: User;
+    try {
+      // `login` guarda el token de sesión y devuelve ya el usuario.
+      usuario = await login(clean, clave);
+    } catch (e) {
+      if (e instanceof ErrorDeRed && !reintento) {
+        setError("");
+        setBuscando(true);
+        const hallado = await buscarServidor().catch(() => null);
+        setBuscando(false);
+        // Solo se reintenta si el servidor está en otra dirección. Si contestó
+        // en la que ya había, el fallo no era la dirección y repetir el intento
+        // solo daría el mismo error dos veces.
+        if (hallado?.cambio) return entrar(clave, true);
+      }
+      throw e;
+    }
+
+    // Esta app es solo para estudiantes, y el servidor opina lo mismo: el
+    // docente no juega, así que `POST /sessions` le responde 403. Dejarlo
+    // entrar no daba un error visible —el fallo al guardar se tragaba— sino
+    // algo peor: una app que parece funcionar y no anota ni un intento.
+    // Se cierra la sesión que se acaba de abrir, también en el servidor.
+    if (usuario.role !== "student") {
+      await logout();
+      throw new Error("Esta app es para estudiantes. El docente entra por la web.");
+    }
+
+    await AsyncStorage.setItem(LAST_STUDENT, JSON.stringify({ name: usuario.name, email: clean }))
+      .catch(() => { /* recordar es opcional */ });
+    onLogin(usuario, clave);
   }
 
   const askEmail = editing || account === null;
@@ -204,9 +251,22 @@ export default function LoginScreen({ onLogin, onOpenSettings }: {
         >
           <Icon name="gear" size={17} color={C.muted} />
           <Text style={[s.serverText, tabular]} numberOfLines={1}>
-            Servidor {getApiUrl().replace(/^https?:\/\//, "")}
+            {buscando
+              ? "Buscando el servidor en la red…"
+              : `Servidor ${apiUrl.replace(/^https?:\/\//, "")}`}
           </Text>
           <Text style={labelType(12, C.ink)}>Cambiar</Text>
+        </Pressable>
+
+        {/* Alcanzable **sin cuenta**: es lo que mira el docente para saber qué
+            repartir, antes de que ningún niño tenga el teléfono en la mano. */}
+        <Pressable
+          onPress={onOpenMaterials} style={s.materiales}
+          accessibilityRole="button" accessibilityLabel="Ver qué materiales hacen falta"
+        >
+          <Icon name="kit" size={17} color={C.ink} />
+          <Text style={[s.materialesTexto, s.flexText]}>Qué necesito para empezar</Text>
+          <Text style={labelType(12, C.ink)}>Ver</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -248,4 +308,9 @@ const s = StyleSheet.create({
   server:    { marginTop: "auto", flexDirection: "row", alignItems: "center", gap: S.sm,
                paddingTop: 16, paddingBottom: 8, minHeight: TAP.min },
   serverText:{ flex: 1, fontFamily: F.regular, fontSize: 12, color: C.muted },
+
+  materiales:     { flexDirection: "row", alignItems: "center", gap: S.sm,
+                    paddingTop: 4, paddingBottom: 12, minHeight: TAP.min },
+  materialesTexto:{ fontFamily: F.regular, fontSize: 12, color: C.ink },
+  flexText:       { flex: 1 },
 });

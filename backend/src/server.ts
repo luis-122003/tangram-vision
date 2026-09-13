@@ -34,6 +34,7 @@ import { rutasPredict } from "./routes/predict.routes.js";
 import { rutasSesiones } from "./routes/sessions.routes.js";
 import { rutasSalud } from "./routes/health.routes.js";
 import { rutasClave } from "./routes/password.routes.js";
+import { rutasEstudiantes } from "./routes/students.routes.js";
 import { estado } from "./vision/client.js";
 
 const app = express();
@@ -65,7 +66,14 @@ app.use(cors({
     return callback(prohibido("Origen no permitido"));
   },
   credentials: false,
-  methods: ["GET", "POST"],
+  // PATCH y DELETE están porque el panel de estudiantes los usa, y sin ellos no
+  // fallan de forma visible: el navegador manda antes una petición de sondeo
+  // (preflight), `cors` contesta que solo admite GET y POST, y **la petición de
+  // verdad no llega a salir**. En la web eso se ve como «no se pudo conectar
+  // con el servidor», igual que si el backend estuviera apagado, mientras que
+  // con curl las dos rutas funcionan perfectamente. Editar y dar de baja a un
+  // estudiante eran exactamente eso.
+  methods: ["GET", "POST", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
   maxAge: 86400,
 }));
@@ -86,6 +94,11 @@ app.use(rutasClave);
 app.use(rutasFiguras);
 app.use(rutasPredict);
 app.use(rutasSesiones);
+// Va detrás de las sesiones a propósito: `/students/:id/sessions` y
+// `/students/:id/stats` los sirve aquel router, y este solo añade `/students`,
+// `/students/:id` y el reseteo de clave. Son métodos y rutas distintas, así que
+// no se pisan; el orden solo deja el bloque del docente junto en la lectura.
+app.use(rutasEstudiantes);
 
 // Ruta desconocida: se responde con la misma forma `{detail}` que el resto de
 // los errores, para que los clientes la muestren igual que cualquier otra.

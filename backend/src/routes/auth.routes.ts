@@ -81,6 +81,16 @@ rutasAuth.post("/token", limiteLogin, async (req, res) => {
     role: usuario.role,
     name: usuario.name,
     id: usuario.id,
+    /**
+     * La cuenta todavía tiene la clave temporal que le puso el docente.
+     *
+     * Viaja en la respuesta del ingreso, y no dentro del token, porque el
+     * cliente tiene que saberlo **ahora** para llevar al estudiante a cambiarla
+     * en vez de al catálogo. Que el servidor además lo impida por su cuenta
+     * (ver `exigirClaveDefinitiva`) es lo que hace que este campo sea una
+     * comodidad de la interfaz y no la única barrera.
+     */
+    must_change_password: usuario.must_change_password,
   });
 });
 
@@ -111,6 +121,14 @@ rutasAuth.post("/token/refresh", async (req, res) => {
     access_token: firmarAcceso(actual),
     token_type: "bearer",
     expires_in: segundosDeVida(),
+    /**
+     * Va también aquí para que la respuesta del refresco describa la cuenta tal
+     * como está, y no como estaba al entrar. En la práctica un cliente rara vez
+     * lo verá cambiar: regenerar la clave desde el panel revoca las sesiones,
+     * así que el refresco de ese usuario falla antes de llegar a esta línea. Es
+     * el estado de la cuenta, no una notificación.
+     */
+    must_change_password: usuario.must_change_password,
   });
 });
 

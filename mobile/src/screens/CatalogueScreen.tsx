@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator, RefreshControl,
 } from "react-native";
 import { getFigures, getSolvedFigures, getStudentStats } from "../api/client";
+import { ordenarPorProgresion } from "../api/orden";
 import type { Figure, StudentStats, User } from "../api/types";
 import Silhouette from "../components/Silhouette";
 import Icon from "../components/Icon";
@@ -23,7 +24,8 @@ const TODAS = "Todas";
  * nicho estuviera más hundido, que hay que explicar; el verde y el visto, no.
  */
 export default function CatalogueScreen({
-  user, recarga, onSelect, onOpenHistory, onOpenSettings, onLogout,
+  user, recarga, onFigures, onSelect, onOpenHistory, onOpenMaterials, onOpenSettings,
+  onLogout,
 }: {
   user: User;
   /**
@@ -35,8 +37,20 @@ export default function CatalogueScreen({
    * que no—.
    */
   recarga: number;
+  /**
+   * El catálogo ya cargado y **en orden de progresión**, para quien lo necesite
+   * fuera de esta pantalla.
+   *
+   * Lo pide la raíz de la app: al terminar una figura hay que saber cuál viene
+   * después, y volver a pedir el catálogo al servidor para eso sería descargarlo
+   * entero cada vez que un niño acierta. Se manda ya ordenado, y no el crudo del
+   * servidor, para que el orden del botón «siguiente» y el de esta rejilla sean
+   * literalmente la misma lista.
+   */
+  onFigures: (figuras: Figure[]) => void;
   onSelect: (fig: Figure) => void;
   onOpenHistory: () => void;
+  onOpenMaterials: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }) {
@@ -58,7 +72,12 @@ export default function CatalogueScreen({
         getStudentStats(user.id).catch(() => null),
         getSolvedFigures(user.id).catch(() => new Set<string>()),
       ]);
-      setFigures(figs);
+      // Se ordena una sola vez, aquí, y esa misma lista es la que se pinta y la
+      // que sube a la raíz: de la más fácil a la más difícil, que es el orden en
+      // que se espera que el niño las recorra. El servidor las devuelve por id.
+      const ordenadas = ordenarPorProgresion(figs);
+      setFigures(ordenadas);
+      onFigures(ordenadas);
       setStats(st);
       setSolved(done);
     } catch (e) {
@@ -97,6 +116,9 @@ export default function CatalogueScreen({
             no solo desde el ingreso: la IP de la PC cambia al pasarse al hotspot
             del celular, y hasta ahora la única forma de corregirla era cerrar
             sesión. Justo el día que más prisa hay. */}
+        {/* Los materiales se consultan mientras se elige figura, que es cuando
+            el estudiante decide si va a la mesa o se queda donde está. */}
+        <IconButton name="kit" onPress={onOpenMaterials} label="Qué materiales necesito" />
         <IconButton name="gear" onPress={onOpenSettings} label="Ajustes del servidor" />
         <IconButton name="logout" onPress={onLogout} label="Salir de mi cuenta" />
       </View>

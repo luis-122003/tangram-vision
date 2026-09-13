@@ -16,6 +16,12 @@ export interface UsuarioFila {
   password_hash: string;
   role: Rol;
   /**
+   * 1 mientras la cuenta siga con la clave temporal que le puso el docente.
+   * Mientras valga 1 el estudiante puede entrar, pero no jugar: el servidor le
+   * cierra `/predict` y `/sessions` hasta que la cambie.
+   */
+  must_change_password: number;
+  /**
    * Se incrementa al cerrar sesión en todos los dispositivos o al cambiar la
    * contraseña. Un token emitido con una versión anterior deja de valer, que es
    * lo que permite revocar sin mantener una lista de tokens vivos.
@@ -32,6 +38,28 @@ export interface Usuario {
   role: Rol;
   password_hash: string;
   token_version: number;
+  /** La clave sigue siendo la temporal: hay que cambiarla antes de usar la app. */
+  must_change_password: boolean;
+}
+
+/**
+ * Estudiante tal como lo ve el docente en el panel de gestión.
+ *
+ * No lleva `password_hash` ni `token_version` a propósito: esto sale por la red
+ * hacia el navegador del docente, y ahí no pinta nada el hash de la clave de un
+ * niño. Lo que sí lleva es su progreso, que es la razón de mirar la lista.
+ */
+export interface EstudianteResumen {
+  id: number;
+  name: string;
+  email: string;
+  must_change_password: boolean;
+  created_at: Date;
+  /** Intentos registrados y cuántos de ellos dio por buenos el validador. */
+  attempts: number;
+  passed: number;
+  /** Última vez que este estudiante intentó una figura. Null si nunca entró. */
+  last_attempt: Date | null;
 }
 
 /** Punto de una silueta, normalizado a 0..1 sobre el lienzo de la figura. */

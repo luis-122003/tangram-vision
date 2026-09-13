@@ -6,6 +6,16 @@ export interface User {
   name:  string;
   email: string;
   role:  Role;
+  /**
+   * La cuenta sigue con la clave temporal que le entregó el docente.
+   *
+   * Mientras valga `true`, el servidor rechaza `/predict` y `/sessions` con un
+   * 403: la app no puede jugar aunque se salte la pantalla. Por eso aquí es
+   * opcional —un backend anterior no lo manda, y ausente significa «no hace
+   * falta cambiarla»—, pero no es solo una ayuda visual: es el aviso de que
+   * todo lo demás va a fallar hasta que se cambie.
+   */
+  must_change_password?: boolean;
 }
 
 /** Figura objetivo del catálogo (tabla `figures` en MySQL). */
@@ -73,6 +83,21 @@ export interface PredictResponse {
   confidence:      number;
   iou_score:       number;
   match:           boolean;
+  /**
+   * Qué fracción de un Tangram entero alcanzó a ver el detector (1 = las siete
+   * fichas) y si alcanzó para calificar.
+   *
+   * Con `detection_ok` en false **el resto del diagnóstico no se comprobó**:
+   * `checks` sale «bien» por vacuidad —dos fichas sueltas nunca se pisan entre
+   * sí— y el parecido se calcula sobre una silueta incompleta que el backend
+   * normaliza por área, así que se infla hasta el tamaño del modelo. Pintar esas
+   * comprobaciones sería afirmar algo que nadie midió.
+   *
+   * Opcionales porque un backend anterior no los manda; ausentes se tratan como
+   * detección suficiente, que es como se comportaba antes.
+   */
+  coverage?:       number;
+  detection_ok?:   boolean;
   /**
    * Acierto mínimo que exige el servidor. Llega en la respuesta para que la
    * marca de la barra sea siempre la del backend, aunque allá se cambie el

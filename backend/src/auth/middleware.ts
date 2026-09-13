@@ -10,6 +10,8 @@
  *   · `exigirPropioODocente` — un estudiante consulta lo suyo, el docente lo de
  *                       cualquiera.
  *   · `soloEstudiante` — el docente no juega: no registra intentos a su nombre.
+ *   · `exigirClaveDefinitiva` — con la clave temporal todavía puesta se puede
+ *                       entrar y cambiarla, pero no usar la aplicación.
  */
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
@@ -41,6 +43,16 @@ declare global {
     interface Request {
       /** Presente en toda ruta que pase por `exigirSesion`. */
       usuario?: Identidad;
+      /**
+       * La cuenta sigue con la clave temporal que le puso el docente.
+       *
+       * Se deja aquí y no dentro de `usuario` a propósito: `Identidad` es lo
+       * que viaja **firmado dentro del token**, y este dato no puede vivir ahí.
+       * Un token se emite al entrar y vale una hora; si el estado de la clave
+       * viajara dentro, cambiarla no surtiría efecto hasta que caducara, que es
+       * justo el rato en el que el estudiante está intentando jugar.
+       */
+      claveTemporal?: boolean;
     }
   }
 }
@@ -90,10 +102,41 @@ export async function exigirSesion(
     // El rol se toma de la base, no del token: si a alguien se le cambia el rol,
     // el cambio surte efecto en la siguiente petición y no cuando caduque.
     req.usuario = { ...identidad, role: usuario.role, name: usuario.name };
+    req.claveTemporal = usuario.must_change_password;
     next();
   } catch (error) {
     next(error);
   }
+}
+
+/**
+ * Cierra la aplicación mientras la clave siga siendo la temporal.
+ *
+ * Va después de `exigirSesion`, y solo sobre lo que es *usar la app* —analizar
+ * una foto, anotar un intento—: entrar, consultar el catálogo y cambiar la
+ * clave siguen abiertos, porque son exactamente los pasos que hay que dar para
+ * salir de este estado.
+ *
+ * Existe porque sin él la obligación de cambiar la clave sería una sugerencia
+ * de la interfaz: bastaría una app vieja, o un cliente escrito a mano, para
+ * saltarse la pantalla y seguir con la clave que el docente repartió en voz
+ * alta delante de toda la clase.
+ *
+ * El código es 403 y no 401: las credenciales están bien y la sesión es válida
+ * —de hecho hace falta tenerla para poder cambiar la clave—, lo que pasa es que
+ * esta cuenta todavía no puede hacer esto. Un 401 haría que el cliente cerrara
+ * la sesión y devolviera al niño al ingreso, en bucle.
+ */
+export function exigirClaveDefinitiva(
+  req: Request, _res: Response, next: NextFunction,
+): void {
+  if (req.claveTemporal) {
+    next(prohibido(
+      "Tienes que cambiar tu clave temporal antes de empezar a jugar.",
+    ));
+    return;
+  }
+  next();
 }
 
 export function exigirDocente(req: Request, _res: Response, next: NextFunction): void {

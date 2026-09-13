@@ -14,6 +14,7 @@ import {
   todasLasSesiones,
 } from "../db/sessions.js";
 import {
+  exigirClaveDefinitiva,
   exigirDocente,
   exigirPropioODocente,
   exigirSesion,
@@ -60,21 +61,27 @@ const esquemaPagina = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 });
 
-rutasSesiones.post("/sessions", exigirSesion, soloEstudiante, async (req, res) => {
-  const datos = esquemaSesion.parse(req.body);
-  const usuario = req.usuario;
-  if (!usuario) throw noAutorizado();
+rutasSesiones.post(
+  "/sessions",
+  exigirSesion,
+  exigirClaveDefinitiva,
+  soloEstudiante,
+  async (req, res) => {
+    const datos = esquemaSesion.parse(req.body);
+    const usuario = req.usuario;
+    if (!usuario) throw noAutorizado();
 
-  await insertarSesion({
-    student_id: usuario.id,          // del token, nunca del cuerpo
-    figure_id: datos.figure_id,
-    match: datos.match,
-    iou_score: datos.iou_score,
-    time_seconds: datos.time_seconds,
-    errors: datos.errors,
-  });
-  res.json({ ok: true });
-});
+    await insertarSesion({
+      student_id: usuario.id,        // del token, nunca del cuerpo
+      figure_id: datos.figure_id,
+      match: datos.match,
+      iou_score: datos.iou_score,
+      time_seconds: datos.time_seconds,
+      errors: datos.errors,
+    });
+    res.json({ ok: true });
+  },
+);
 
 /** Historial completo del curso: dashboard del docente. */
 rutasSesiones.get("/sessions", exigirSesion, exigirDocente, async (req, res) => {
@@ -105,10 +112,26 @@ rutasSesiones.get(
   },
 );
 
+/**
+ * Estadísticas de rendimiento de un estudiante: intentos, acertados, precisión.
+ *
+ * Es del docente, y solo suyo. Antes la pedía el propio estudiante para pintarse
+ * sus tres cifras en la pantalla de inicio, y esa pantalla ya no existe: el
+ * progreso de las actividades se mira desde el panel del docente y desde ningún
+ * otro sitio.
+ *
+ * La regla se cierra aquí y no solo quitando las tarjetas de la interfaz porque
+ * son cosas distintas. Sin `exigirDocente`, el dato seguiría estando a un `curl`
+ * con el token del niño: la pantalla habría desaparecido y la cifra no.
+ *
+ * `/students/:id/sessions`, justo arriba, sigue abierta al propio estudiante a
+ * propósito: de ahí saca la app móvil **qué figuras ha resuelto** para marcarlas
+ * en el catálogo, que es parte de jugar y no una medida de su desempeño.
+ */
 rutasSesiones.get(
   "/students/:id/stats",
   exigirSesion,
-  exigirPropioODocente("id"),
+  exigirDocente,
   async (req, res) => {
     res.json(await estadisticasDeEstudiante(idDeRuta.parse(req.params.id)));
   },
