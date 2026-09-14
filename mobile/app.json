@@ -56,14 +56,19 @@
             "usesCleartextTraffic": true
           }
         }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#FCF6E8"
+        }
       ]
     ],
     "extra": {
-      "apiUrl": "http://192.168.1.10:8000",
-      "apiUrls": [
-        { "etiqueta": "Universidad", "url": "http://192.168.1.10:8000" },
-        { "etiqueta": "Universidad (anterior)", "url": "http://192.168.1.11:8000" }
-      ]
+      "_comentario": "apiUrls son los atajos de servidor que la app ofrece en Ajustes, para no escribir la IP cada vez. Va vacía a propósito: una dirección solo sirve en la red donde se escribió, y publicarla describe esa red a cualquiera. Añade las tuyas así: { \"etiqueta\": \"Aula\", \"url\": \"http://192.168.1.10:8000\" }",
+      "apiUrls": []
     }
   }
 }

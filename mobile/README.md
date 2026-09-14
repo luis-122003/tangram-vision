@@ -165,13 +165,17 @@ proyecto donde aparece una IP:
 
 ```json
 "extra": {
-  "apiUrl": "http://192.168.1.10:8000",
   "apiUrls": [
-    { "etiqueta": "Universidad", "url": "http://192.168.1.10:8000" },
-    { "etiqueta": "Universidad (anterior)", "url": "http://192.168.1.11:8000" }
+    { "etiqueta": "Aula",  "url": "http://192.168.1.10:8000" },
+    { "etiqueta": "Casa",  "url": "http://192.168.0.20:8000" }
   ]
 }
 ```
+
+**Viene vacía a propósito.** Una IP solo sirve en la red donde se escribió, y
+este repositorio es público: publicar las direcciones de un aula concreta no
+ayuda a nadie de fuera y describe esa red a cualquiera. Pon las tuyas antes de
+generar el APK.
 
 Añadir una red al APK es añadir una entrada a esa lista; nada más en el código
 depende de ella. Las direcciones se limpian al leerlas (espacios de más, barra

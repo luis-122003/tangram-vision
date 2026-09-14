@@ -43,13 +43,23 @@ interface Extra {
 const EXTRA = (Constants.expoConfig?.extra ?? {}) as Extra;
 
 /**
- * Red de reserva por si `app.json` no trae ninguna. No es la fuente de verdad:
- * la lista de verdad está en `expo.extra.apiUrls`, que es donde hay que
+ * Dirección de reserva por si `app.json` no trae ninguna. No es la fuente de
+ * verdad: la lista de verdad está en `expo.extra.apiUrls`, que es donde hay que
  * añadirlas para no tener que tocar el código.
+ *
+ * Es `localhost` a propósito, y no la IP de ninguna red concreta. Una dirección
+ * real aquí solo sirve en la red donde se escribió —en cualquier otra es una
+ * ruta muerta que hace perder tiempo antes de mirar los ajustes—, y además
+ * describe la red interna de quien la puso a todo el que lea el repositorio.
+ *
+ * Desde un teléfono, `localhost` es el propio teléfono y nunca va a responder.
+ * Eso es correcto: obliga a escribir la dirección del servidor en Ajustes, que
+ * es el único dato que la app no puede adivinar. Cada quien añade las suyas en
+ * `expo.extra.apiUrls` de su `app.json`.
  */
 const RED_DE_RESERVA: RedConocida = {
-  etiqueta: "Universidad",
-  url:      "http://192.168.1.10:8000",
+  etiqueta: "Servidor local",
+  url:      "http://localhost:8000",
 };
 
 /** Limpia lo que escriba el usuario: espacios, barra final, esquema faltante. */

@@ -38,6 +38,12 @@ mobile/ios/
 *.apk
 *.aab
 
+# ─── Documentación que no se publica ────────────────────────────────────────
+# El análisis de seguridad se mantiene fuera del repositorio, que es público.
+# La copia viva está en la carpeta del proyecto, un nivel por encima de este
+# directorio, y la lleva quien mantiene el sistema.
+SEGURIDAD.md
+
 # ─── Respaldos locales ──────────────────────────────────────────────────────
 # Copias de seguridad hechas a mano antes de un cambio grande (archivo.bak-FECHA).
 # Son útiles en la máquina y no pertenecen al historial: para eso está git, que ya

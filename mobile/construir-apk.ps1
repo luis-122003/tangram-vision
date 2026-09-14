@@ -57,11 +57,21 @@ function Expand-PropertiesPath([string]$valor) {
 # del proyecto, lo que diga el entorno, y por último el sitio por defecto de
 # Android Studio. Con uno que responda, basta.
 $candidatos = @()
-$linea = Select-String -Path "$raiz\android\local.properties" -Pattern '^\s*sdk\.dir\s*=\s*(.+)$' -ErrorAction SilentlyContinue
-if ($linea) {
-    $candidatos += [pscustomobject]@{
-        ruta   = Expand-PropertiesPath $linea.Matches.Groups[1].Value
-        origen = "android\local.properties"
+# El Test-Path va antes a propósito. `expo prebuild --clean` borra android/ entero,
+# y con él local.properties, que no se versiona porque la ruta del SDK es de cada
+# equipo. Sin esta guarda, Select-String sobre el archivo ausente aborta el script
+# --con $ErrorActionPreference en "Stop", ni -ErrorAction SilentlyContinue lo
+# salva-- y las otras dos vías de encontrar el SDK, que estaban justo debajo y
+# habrían funcionado, no se llegan a probar nunca. El síntoma es el peor posible:
+# "no encuentro local.properties" cuando el problema real no era ese.
+$props = "$raiz\android\local.properties"
+if (Test-Path $props) {
+    $linea = Select-String -Path $props -Pattern '^\s*sdk\.dir\s*=\s*(.+)$'
+    if ($linea) {
+        $candidatos += [pscustomobject]@{
+            ruta   = Expand-PropertiesPath $linea.Matches.Groups[1].Value
+            origen = "android\local.properties"
+        }
     }
 }
 foreach ($v in "ANDROID_HOME", "ANDROID_SDK_ROOT") {
