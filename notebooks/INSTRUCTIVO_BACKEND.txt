@@ -242,7 +242,8 @@ Ahora hay DOS: uno por servicio. Si no existen, copialos de los ejemplos con
   el backend (Ctrl+C y `npm run dev`) antes de cada pasada. Si se te olvida, el
   script lo detecta y te lo dice en vez de dar fallos confusos.
 
-  El detalle de que protege cada cosa esta en SEGURIDAD.md, en la raiz.
+  El detalle de que protege cada cosa esta en el analisis de seguridad, que
+  se mantiene fuera del repositorio.
 
 
 --------------------------------------------------------------------------------

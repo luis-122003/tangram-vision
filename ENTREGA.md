@@ -13,7 +13,7 @@ esto es el guion.
 | Código fuente | este repositorio | backend, frontend, mobile, vision-service |
 | App Android | `mobile/tangram-ia-1.0.0.apk` | se instala sin Play Store |
 | Modelo detector | `vision-service/models/tangram_formas_v2.pt` | no va en git (pesa 23 MB) |
-| Documentación | `README.md`, `SEGURIDAD.md`, `mobile/README.md` | |
+| Documentación | `README.md`, `mobile/README.md` | el análisis de seguridad va aparte, fuera del repositorio |
 
 Los pesos y el APK están en `.gitignore` a propósito. Si la entrega es un ZIP
 en vez de un repositorio, hay que **añadirlos a mano**: sin el `.pt` el sistema

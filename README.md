@@ -484,9 +484,11 @@ con AES-256-GCM, con un índice ciego para poder buscarlos en el login. Las
 contraseñas van con bcrypt, y el inicio de sesión está limitado por IP y por
 cuenta con bloqueo creciente, sin captcha: quien entra es un niño de primaria.
 
-**Todo lo anterior está documentado y razonado en [SEGURIDAD.md](SEGURIDAD.md)**,
-incluidas las decisiones que se tomaron en contra del manual por el contexto del
-aula y lo que queda pendiente. Para comprobar que sigue en pie:
+El análisis completo —cada decisión razonada, incluidas las que se tomaron en
+contra del manual por el contexto del aula, y lo que queda pendiente— se lleva
+**fuera de este repositorio**, con quien mantiene el sistema. Aquí no va porque
+mezcla el diseño con información de operación, y esa parte no tiene por qué
+viajar con el código. Para comprobar que la seguridad sigue en pie:
 
 ```bash
 cd backend && npm run probar-seguridad   # 40 comprobaciones sobre el servidor vivo

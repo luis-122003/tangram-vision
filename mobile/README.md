@@ -318,6 +318,7 @@ distribuirla de verdad:
 - **Sin tests, sin linter y sin CI.** La red de seguridad de hoy es
   `npx tsc --noEmit`, que sí conviene correr antes de cada APK.
 - **Los tokens viven en `AsyncStorage`**, no en `expo-secure-store`. En Android
-  ese almacenamiento es privado de la app salvo en un teléfono rooteado, y la
-  decisión está razonada en `../SEGURIDAD.md`.
+  ese almacenamiento es privado de la app salvo en un teléfono rooteado. El
+  razonamiento completo está en el análisis de seguridad, que se mantiene fuera
+  de este repositorio.
 - **iOS** no está probado: hay configuración en `app.json`, pero no hay build.
