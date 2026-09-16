@@ -136,3 +136,18 @@ export const limiteLogin: RequestHandler = rateLimit({
   limit: config.limites.loginPorIp,
   skipSuccessfulRequests: true,
 });
+
+/**
+ * Límite del registro desde la app, por IP y por hora.
+ *
+ * A diferencia del ingreso, aquí **cuentan también los intentos que salen
+ * bien**: una cuenta creada es justo lo que hay que racionar, porque cada una
+ * es una fila cifrada con bcrypt de por medio y un nombre más en el panel del
+ * docente. Con `skipSuccessfulRequests` un script podría crear cuentas sin
+ * tope mientras no fallara ninguna.
+ */
+export const limiteRegistro: RequestHandler = rateLimit({
+  ...comunes,
+  windowMs: 60 * 60_000,
+  limit: config.limites.registroPorIp,
+});

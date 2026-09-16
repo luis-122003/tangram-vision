@@ -249,6 +249,14 @@ export default function StudentsAdmin() {
                 "muestra una sola vez; el estudiante tendrá que cambiarla la primera " +
                 "vez que entre en la app."}
         </p>
+        {/* La otra puerta de alta. Se dice aquí, junto al formulario, porque es
+            donde el docente se pregunta por qué hay en la lista un nombre que
+            él no escribió. */}
+        <p style={{ ...T.body(BRUT.muted), margin: "6px 0 0", fontSize: 12 }}>
+          El estudiante también puede crearse la cuenta desde la pantalla de
+          ingreso de la app, con su nombre, su correo y una clave de cuatro
+          dígitos que elige él. Aparece en esta lista con el perfil ya activo.
+        </p>
       </form>
 
       {error !== "" && (
@@ -259,16 +267,28 @@ export default function StudentsAdmin() {
 
       {/* ── Lista ─────────────────────────────────────────────────────────── */}
       <div style={{ padding: "1.4rem", ...BRUT.raised(6) }}>
-        <p style={{ ...T.title(18), margin: "0 0 16px", textTransform: "uppercase" }}>
-          Estudiantes
-          <span style={{
-            fontWeight: 500, fontSize: 12, color: BRUT.muted,
-            marginLeft: 10, letterSpacing: 0, textTransform: "none",
-          }}>
-            {students.length} en total
-            {pendientes > 0 && ` · ${pendientes} sin activar su perfil`}
-          </span>
-        </p>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 12, margin: "0 0 16px",
+        }}>
+          <p style={{ ...T.title(18), margin: 0, textTransform: "uppercase" }}>
+            Estudiantes
+            <span style={{
+              fontWeight: 500, fontSize: 12, color: BRUT.muted,
+              marginLeft: 10, letterSpacing: 0, textTransform: "none",
+            }}>
+              {students.length} en total
+              {pendientes > 0 && ` · ${pendientes} sin activar su perfil`}
+            </span>
+          </p>
+          {/* Los registros desde la app llegan mientras esta pestaña está
+              abierta: con esto el docente los ve sin recargar la página. */}
+          <button
+            type="button" onClick={() => void cargar()} disabled={ocupado}
+            style={{ ...botonFila, padding: "8px 14px" }}
+            title="Volver a pedir la lista al servidor"
+          >Actualizar</button>
+        </div>
 
         {loading ? (
           <p style={{ padding: "2rem", textAlign: "center", color: BRUT.muted, fontSize: 14, margin: 0 }}>
@@ -280,10 +300,10 @@ export default function StudentsAdmin() {
           </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", fontSize: 13, minWidth: 780, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", fontSize: 13, minWidth: 880, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: BRUT.ink }}>
-                  {["Estudiante", "Correo", "Estado", "Intentos", "Último intento", ""].map(h => (
+                  {["Estudiante", "Correo", "Estado", "Alta", "Intentos", "Último intento", ""].map(h => (
                     <th key={h} style={{
                       ...T.eyebrow(BRUT.paper), fontSize: 10,
                       padding: "11px 14px", textAlign: "left",
@@ -319,6 +339,12 @@ export default function StudentsAdmin() {
                         }}>
                           {s.must_change_password ? "Clave temporal" : "Perfil activo"}
                         </span>
+                      </td>
+                      {/* Cuándo se creó la cuenta. Es lo que distingue, en una
+                          lista ordenada por alta, al que se registró hoy desde
+                          la app del que el docente dio de alta en septiembre. */}
+                      <td style={{ ...celda, color: BRUT.muted, fontSize: 12, fontWeight: 500 }}>
+                        {new Date(s.created_at).toLocaleDateString("es-CO")}
                       </td>
                       <td style={{ ...celda, ...T.stat(14), letterSpacing: 0 }}>
                         {s.passed} / {s.attempts}

@@ -200,29 +200,27 @@ export interface LoginResponse {
 }
 
 /**
- * Entra y guarda el token de sesión en el teléfono.
+ * Una petición que abre sesión —entrar o registrarse— y guarda sus tokens.
  *
- * Las credenciales viajan como formulario porque así las espera `/token`: el
- * PIN de cuatro dígitos que teclea el niño va como `password`.
+ * Las dos rutas responden con la misma forma (`LoginResponse`), así que lo que
+ * cambia entre ellas es solo la ruta y el cuerpo; todo lo demás —el tope de
+ * espera, la traducción del fallo de red, el guardado de la sesión— es lo
+ * mismo y vive aquí una sola vez.
  *
  * Lleva su propio tope de espera, más corto que el de las demás peticiones
  * (ver `LOGIN_TIMEOUT_MS`): sin él, una dirección equivocada dejaba el spinner
  * girando hasta que se rendía el sistema operativo, un par de minutos después.
  */
-export async function login(email: string, password: string): Promise<User> {
-  const body = new URLSearchParams({ username: email, password });
+async function abrirSesion(
+  path: string, init: RequestInit, email: string, fallo: string,
+): Promise<User> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
   const inicio = Date.now();
   try {
     let res: Response;
     try {
-      res = await fetch(`${getApiUrl()}/token`, {
-        method:  "POST",
-        signal:  controller.signal,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body:    body.toString(),
-      });
+      res = await fetch(`${getApiUrl()}${path}`, { ...init, signal: controller.signal });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
         throw new ErrorDeRed(
@@ -235,7 +233,7 @@ export async function login(email: string, password: string): Promise<User> {
     }
     if (!res.ok) {
       const err = await res.json().catch(() => null);
-      throw new Error(detailToMessage(err?.detail, "Credenciales incorrectas"));
+      throw new Error(detailToMessage(err?.detail, fallo));
     }
     const data: LoginResponse = await res.json();
     const usuario: User = {
@@ -253,6 +251,53 @@ export async function login(email: string, password: string): Promise<User> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Entra y guarda el token de sesión en el teléfono.
+ *
+ * Las credenciales viajan como formulario porque así las espera `/token`: el
+ * PIN de cuatro dígitos que teclea el niño va como `password`.
+ */
+export async function login(email: string, password: string): Promise<User> {
+  const body = new URLSearchParams({ username: email, password });
+  return abrirSesion(
+    "/token",
+    {
+      method:  "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body:    body.toString(),
+    },
+    email,
+    "Credenciales incorrectas",
+  );
+}
+
+/**
+ * Crea la cuenta del estudiante y entra con ella en el mismo viaje.
+ *
+ * `POST /register` responde igual que `/token`, con los tokens ya emitidos: el
+ * niño no vuelve a teclear la clave que acaba de elegir. La cuenta nace con el
+ * perfil activo —la clave la eligió él—, así que de aquí se va al catálogo y
+ * no a la pantalla de cambiarla.
+ *
+ * El servidor es quien dice por qué no pudo: correo repetido (409), clave
+ * demasiado fácil (422) o registro cerrado por el docente (403). Todos llegan
+ * como `{detail}` y se muestran tal cual.
+ */
+export async function registrar(
+  nombre: string, email: string, password: string,
+): Promise<User> {
+  return abrirSesion(
+    "/register",
+    {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ name: nombre, email, password }),
+    },
+    email,
+    "No se pudo crear la cuenta",
+  );
 }
 
 /**

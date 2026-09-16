@@ -22,6 +22,14 @@ El docente sigue usando la versión web (`../frontend`).
    que `POST /token` sigue recibiendo username + password. Al docente se le
    rechaza aquí: esta app es del estudiante, y el servidor no le acepta intentos
    (`POST /sessions` responde 403).
+   La misma pantalla sirve para **crear la cuenta** («¿Es tu primera vez? ·
+   Crear cuenta»): nombre, correo y una clave de cuatro dígitos en el mismo
+   teclado, contra `POST /register`. El servidor responde igual que `/token`,
+   con la sesión ya abierta, así que de ahí se va derecho al catálogo; la
+   cuenta nace con el perfil activo porque la clave la eligió el niño, y el
+   docente la ve aparecer en la lista de estudiantes de su panel. Las claves
+   fáciles (`1111`, `1234`…) se rechazan, y el docente puede cerrar esta puerta
+   con `ALLOW_SELF_REGISTRATION=0` en el backend.
 2. **Catálogo** — figuras de `/figures` con su silueta recortada sobre un bloque
    de color, filtros por categoría, estadísticas de `/students/{id}/stats` y una
    marca en las figuras ya logradas (se deducen de `/students/{id}/sessions`).

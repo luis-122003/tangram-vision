@@ -11,8 +11,9 @@
  * antes de salir del escritorio.
  *
  * A diferencia de `probar-seguridad.mjs`, esta NO muta la base más allá de un
- * intento de prueba: no borra registros, no cierra sesiones y no provoca
- * bloqueos por fuerza bruta, así que se puede repetir cuantas veces se quiera.
+ * intento de prueba y de una cuenta de registro que se borra al final: no toca
+ * cuentas ajenas, no cierra sesiones y no provoca bloqueos por fuerza bruta,
+ * así que se puede repetir cuantas veces se quiera.
  *
  *   node scripts/probar-contrato-movil.mjs
  *   node scripts/probar-contrato-movil.mjs http://192.168.1.10:8000
@@ -295,6 +296,75 @@ comprobar("el token de refresco da uno de acceso nuevo", renovado.code === 200, 
 campo(renovado.cuerpo, "access_token", "string");
 const conNuevo = await pedir("/figures", { headers: auth(renovado.cuerpo?.access_token) });
 comprobar("y el token nuevo funciona", conNuevo.code === 200, `HTTP ${conNuevo.code}`);
+
+// ─── 8. Registro desde la app ───────────────────────────────────────────────
+// La pantalla de ingreso crea la cuenta con `POST /register` y espera exactamente
+// la misma respuesta que `/token`: si el registro dejara de traer los tokens, el
+// niño vería «cuenta creada» y a continuación un catálogo que no carga.
+//
+// Crea una cuenta con un correo único y la borra al final con la cuenta del
+// docente de demostración. Si esa cuenta ya no tiene la clave `1234`, la de
+// prueba se queda y se avisa para darla de baja desde el panel.
+console.log("\n=== 8. Registro desde la app ===");
+const correoPrueba = `contrato-${Date.now()}@tangram.edu`;
+const registro = await pedir("/register", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "Prueba de contrato", email: correoPrueba, password: "2580" }),
+});
+if (registro.code === 403) {
+  console.log("  El registro está cerrado (ALLOW_SELF_REGISTRATION=0): se omite esta sección.");
+} else {
+  comprobar("crea la cuenta y responde 201", registro.code === 201, `HTTP ${registro.code}`);
+  const tokenNuevo = campo(registro.cuerpo, "access_token", "string");
+  campo(registro.cuerpo, "refresh_token", "string");
+  campo(registro.cuerpo, "expires_in", "number");
+  campo(registro.cuerpo, "name", "string");
+  const idNuevo = campo(registro.cuerpo, "id", "number");
+  comprobar("el rol es 'student'", registro.cuerpo?.role === "student", `"${registro.cuerpo?.role}"`);
+  // La clave la eligió el estudiante: no puede nacer marcada como temporal, o
+  // la app lo mandaría a cambiarla nada más crearla.
+  comprobar("nace con el perfil activo (no pide cambiar la clave)",
+            registro.cuerpo?.must_change_password === false);
+
+  // Y la sesión que devuelve sirve tal cual: es lo que evita el segundo viaje.
+  const conRegistro = await pedir("/figures", { headers: auth(tokenNuevo) });
+  comprobar("la sesión recién creada ya funciona", conRegistro.code === 200, `HTTP ${conRegistro.code}`);
+
+  const repetido = await pedir("/register", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Otra vez", email: correoPrueba, password: "2580" }),
+  });
+  comprobar("el correo repetido responde 409 con {detail}",
+            repetido.code === 409 && typeof repetido.cuerpo?.detail === "string",
+            `HTTP ${repetido.code}`);
+
+  const trivial = await pedir("/register", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Clave fácil", email: `trivial-${Date.now()}@tangram.edu`, password: "1111" }),
+  });
+  comprobar("una clave trivial (1111) se rechaza con 422", trivial.code === 422, `HTTP ${trivial.code}`);
+
+  // Limpieza, con la cuenta del docente.
+  const respDoc = await fetch(`${API}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ username: "docente@tangram.edu", password: "1234" }).toString(),
+  });
+  const doc = await respDoc.json().catch(() => null);
+  if (respDoc.ok && typeof idNuevo === "number") {
+    // El docente la ve en su panel antes de borrarla: es lo que se quiere
+    // comprobar, que el registro desde el teléfono llega a la lista del curso.
+    const lista = await pedir("/students", { headers: auth(doc.access_token) });
+    comprobar("el docente ve la cuenta nueva en GET /students",
+              Array.isArray(lista.cuerpo) && lista.cuerpo.some(e => e.id === idNuevo));
+    const baja = await pedir(`/students/${idNuevo}`, {
+      method: "DELETE", headers: auth(doc.access_token),
+    });
+    comprobar("cuenta de prueba borrada", baja.code === 200, `HTTP ${baja.code}`);
+  } else {
+    console.log(`  [!] No se pudo entrar como docente para borrar ${correoPrueba}: dala de baja desde el panel.`);
+  }
+}
 
 console.log("\n" + "=".repeat(62));
 console.log(`RESULTADO: ${ok} correctas, ${fallo} fallidas`);

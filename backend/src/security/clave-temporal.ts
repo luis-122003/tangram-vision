@@ -30,6 +30,19 @@ const PROHIBIDAS = new Set([
 ]);
 
 /**
+ * ¿Es una de las claves que se prueban primero?
+ *
+ * La misma lista que el generador evita, pero mirada desde el otro lado: la
+ * clave que **elige** un niño al registrarse desde la app. Si el servidor se
+ * niega a entregar un `1111` cuando lo genera él, no tiene sentido aceptarlo
+ * con gusto cuando lo escribe el estudiante, que es de quien más cabe esperar
+ * que lo ponga.
+ */
+export function esClaveTrivial(clave: string): boolean {
+  return PROHIBIDAS.has(clave);
+}
+
+/**
  * Genera una clave temporal de cuatro dígitos.
  *
  * Usa `randomInt` de `node:crypto` y no `Math.random()`: el generador de

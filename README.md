@@ -598,6 +598,7 @@ explica que no cuenta en contra.
 | Método | Ruta                       | Acceso            | Descripción                                    |
 |--------|----------------------------|-------------------|------------------------------------------------|
 | POST   | `/token`                   | público           | Login (bcrypt) → token de acceso y de refresco |
+| POST   | `/register`                | público           | El estudiante se crea la cuenta desde la app y entra; misma respuesta que `/token` |
 | POST   | `/token/refresh`           | público           | Renueva el token de acceso                     |
 | POST   | `/logout`                  | autenticado       | Cierra la sesión en todos los dispositivos     |
 | GET    | `/health`                  | público           | MySQL, detector, almacén de fotos, umbral y cómo se compara |
@@ -617,6 +618,16 @@ explica que no cuenta en contra.
 
 Los listados devuelven `{ rows, total, limit, offset }` y nunca más de 100 filas,
 por mucho que se pidan.
+
+**Dos formas de dar de alta.** El docente crea cuentas desde su panel
+(`POST /students`), o el estudiante se registra él mismo desde la pantalla de
+ingreso de la app (`POST /register`) con su nombre, su correo y una clave de
+cuatro dígitos que elige él. Las dos escriben la misma fila de `users` con las
+mismas reglas (`routes/esquemas.ts`), y las dos aparecen en el panel del docente
+por igual: la diferencia es que la cuenta registrada desde la app nace ya con el
+perfil activo, porque la clave la eligió su dueño. El registro está limitado por
+IP (`RATE_LIMIT_REGISTER_IP`), rechaza las claves triviales que el generador
+tampoco reparte (`1111`, `1234`…) y se cierra con `ALLOW_SELF_REGISTRATION=0`.
 
 **La foto del intento.** `/predict` devuelve `image_path`: la ruta donde quedó
 guardada la foto, o `null` si no se guardó. El cliente la devuelve tal cual en el

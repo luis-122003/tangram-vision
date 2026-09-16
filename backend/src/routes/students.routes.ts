@@ -16,7 +16,6 @@
  * disponible para cualquiera que entre al panel meses después.
  */
 import { Router } from "express";
-import { z } from "zod";
 import {
   actualizarEstudiante,
   buscarEstudiante,
@@ -31,27 +30,9 @@ import { exigirDocente, exigirSesion, idDeRuta } from "../auth/middleware.js";
 import { borrarFotosDe } from "../storage/supabase.js";
 import { generarClaveTemporal } from "../security/clave-temporal.js";
 import { HttpError, noEncontrado } from "../http/errors.js";
+import { esquemaDatosEstudiante, reglaClave } from "./esquemas.js";
 
 export const rutasEstudiantes = Router();
-
-/**
- * Nombre y correo del estudiante.
- *
- * El tope del correo son 254 caracteres porque es el máximo que admite una
- * dirección de correo; el del nombre es holgado a propósito, que los apellidos
- * compuestos existen. El `trim` va dentro del esquema y no en el manejador para
- * que lo que se valide sea exactamente lo que se va a guardar: sin él, un
- * nombre de un solo espacio pasaba el `min(2)` y quedaba en blanco en la lista.
- */
-const esquemaDatos = z.object({
-  name: z.string().trim().min(2, "El nombre debe tener al menos 2 caracteres").max(120),
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .email("Ese correo no tiene un formato válido")
-    .max(254),
-});
 
 /**
  * El alta admite además una contraseña, y es opcional a propósito.
@@ -61,28 +42,24 @@ const esquemaDatos = z.object({
  * pasa si este campo no viene. Pero el que da de alta a **un** niño y se la va a
  * dictar ahí mismo sí quiere elegirla, y hasta ahora no podía.
  *
- * Los límites son los mismos que los de `POST /password` —mínimo 4, máximo
- * 200—, y no por simetría: son los que ya tiene que cumplir cualquier clave de
- * este sistema, así que aceptar aquí una de tres caracteres crearía una cuenta
- * cuya clave el propio servidor rechazaría en el siguiente cambio.
+ * Los límites de la clave son los de `reglaClave` —mínimo 4, máximo 200—, y no
+ * por simetría: son los que ya tiene que cumplir cualquier clave de este
+ * sistema, así que aceptar aquí una de tres caracteres crearía una cuenta cuya
+ * clave el propio servidor rechazaría en el siguiente cambio.
  */
-const esquemaAlta = esquemaDatos.extend({
-  password: z
-    .string()
-    .min(4, "La contraseña debe tener al menos 4 caracteres")
-    .max(200)
-    .optional(),
+const esquemaAlta = esquemaDatosEstudiante.extend({
+  password: reglaClave.optional(),
 });
 
 /**
  * En la edición los dos campos son opcionales, pero tiene que venir alguno.
  *
- * Sale de `esquemaDatos` y no de `esquemaAlta` para que `PATCH` no acepte
- * `password`: la clave se cambia por su propio camino —el estudiante con
+ * Sale de `esquemaDatosEstudiante` y no de `esquemaAlta` para que `PATCH` no
+ * acepte `password`: la clave se cambia por su propio camino —el estudiante con
  * `POST /password`, el docente con el reseteo—, y los dos revocan las sesiones
  * abiertas. Colarla aquí habría dado una tercera vía que no lo hace.
  */
-const esquemaEdicion = esquemaDatos.partial().refine(
+const esquemaEdicion = esquemaDatosEstudiante.partial().refine(
   datos => datos.name !== undefined || datos.email !== undefined,
   { message: "No hay nada que cambiar: envía un nombre o un correo" },
 );

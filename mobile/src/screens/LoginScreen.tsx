@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Svg, { Polygon, Rect } from "react-native-svg";
-import { buscarServidor, ErrorDeRed, login, logout } from "../api/client";
+import { buscarServidor, ErrorDeRed, login, logout, registrar } from "../api/client";
 import { useApiUrl } from "../api/config";
 import type { User } from "../api/types";
 import Icon from "../components/Icon";
@@ -35,7 +35,16 @@ const LAST_STUDENT = "tangram.lastStudent";
  * Es también la pantalla más densa del sistema: doce teclas con filete y sombra
  * son veinticuatro dibujos a la vez. Por eso las teclas llevan sombra de 3 px y
  * no de 5: a plena longitud, doce sombras seguidas se leen como ruido.
+ *
+ * La misma pantalla sirve para **crear la cuenta**. No es otra pantalla porque
+ * pide lo mismo que entrar más dos datos —nombre y correo— y la clave se
+ * teclea en el mismo teclado de cuatro dígitos: la cuenta nace ya con la clave
+ * que el niño eligió, así que `POST /register` responde con la sesión abierta
+ * y de aquí se va derecho al catálogo. El docente la ve aparecer en su panel
+ * sin haber hecho nada.
  */
+type Modo = "entrar" | "registro";
+
 export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }: {
   /**
    * Entró. Se devuelve también **la clave que tecleó**, y no por capricho: si
@@ -58,6 +67,14 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   const [pin,        setPin]        = useState("");
   const [error,      setError]      = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [modo,       setModo]       = useState<Modo>("entrar");
+  /**
+   * Nombre y correo de la cuenta nueva. Van aparte del `email` del ingreso a
+   * propósito: cambiar de modo no puede pisar el correo con el que el teléfono
+   * recuerda al último estudiante, ni al revés.
+   */
+  const [nombreNuevo, setNombreNuevo] = useState("");
+  const [correoNuevo, setCorreoNuevo] = useState("");
   /** Se está sondeando la red buscando el servidor (ver `entrar`). */
   const [buscando,   setBuscando]   = useState(false);
   // La dirección se dibuja desde el hook y no leyéndola una vez: la búsqueda
@@ -86,12 +103,25 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     setPin(p => p.slice(0, -1));
   }
 
+  /** Cambia entre entrar y registrarse. La clave a medias no se arrastra. */
+  function cambiarModo(nuevo: Modo) {
+    setModo(nuevo);
+    setPin("");
+    setError("");
+  }
+
+  /** Los dos datos del registro están escritos y tienen pinta de serlo. */
+  const datosDeRegistro =
+    nombreNuevo.trim().length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correoNuevo.trim());
+  const canSubmit = pin.length === PIN_LENGTH && (modo === "entrar" || datosDeRegistro);
+
   async function submit() {
-    if (pin.length < PIN_LENGTH || submitting) return;
+    if (!canSubmit || submitting) return;
     setError("");
     setSubmitting(true);
     try {
-      await entrar(pin);
+      if (modo === "registro") await crearCuenta(pin);
+      else await entrar(pin);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo entrar.");
       setPin("");
@@ -101,7 +131,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   }
 
   /**
-   * Un intento de ingreso.
+   * Lanza una petición que abre sesión, mudándose de red si hace falta.
    *
    * Si falla **por red** —y solo por red: un PIN equivocado no cuenta— se
    * sondean las otras direcciones conocidas y, si el servidor aparece en una de
@@ -110,28 +140,42 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
    * muda de red por su cuenta en vez de mandar a un niño a Ajustes a teclear
    * una IP.
    *
+   * Lo comparten entrar y registrarse: una cuenta nueva se crea en el mismo
+   * aula, con el mismo teléfono y la misma dirección guardada de ayer.
+   */
+  async function conReintentoDeRed(peticion: () => Promise<User>): Promise<User> {
+    try {
+      return await peticion();
+    } catch (e) {
+      if (!(e instanceof ErrorDeRed)) throw e;
+      setError("");
+      setBuscando(true);
+      const hallado = await buscarServidor().catch(() => null);
+      setBuscando(false);
+      // Solo se reintenta si el servidor está en otra dirección. Si contestó
+      // en la que ya había, el fallo no era la dirección y repetir el intento
+      // solo daría el mismo error dos veces.
+      if (hallado?.cambio) return peticion();
+      throw e;
+    }
+  }
+
+  /** El teléfono se queda con quién entró, para no pedir el correo mañana. */
+  async function recordar(usuario: User, correo: string): Promise<void> {
+    await AsyncStorage.setItem(LAST_STUDENT, JSON.stringify({ name: usuario.name, email: correo }))
+      .catch(() => { /* recordar es opcional */ });
+  }
+
+  /**
+   * Un intento de ingreso.
+   *
    * La clave se pasa por parámetro porque el reintento la necesita intacta: el
    * estado se limpia al mostrar el error.
    */
-  async function entrar(clave: string, reintento = false): Promise<void> {
+  async function entrar(clave: string): Promise<void> {
     const clean = email.trim();
-    let usuario: User;
-    try {
-      // `login` guarda el token de sesión y devuelve ya el usuario.
-      usuario = await login(clean, clave);
-    } catch (e) {
-      if (e instanceof ErrorDeRed && !reintento) {
-        setError("");
-        setBuscando(true);
-        const hallado = await buscarServidor().catch(() => null);
-        setBuscando(false);
-        // Solo se reintenta si el servidor está en otra dirección. Si contestó
-        // en la que ya había, el fallo no era la dirección y repetir el intento
-        // solo daría el mismo error dos veces.
-        if (hallado?.cambio) return entrar(clave, true);
-      }
-      throw e;
-    }
+    // `login` guarda el token de sesión y devuelve ya el usuario.
+    const usuario = await conReintentoDeRed(() => login(clean, clave));
 
     // Esta app es solo para estudiantes, y el servidor opina lo mismo: el
     // docente no juega, así que `POST /sessions` le responde 403. Dejarlo
@@ -143,8 +187,22 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
       throw new Error("Esta app es para estudiantes. El docente entra por la web.");
     }
 
-    await AsyncStorage.setItem(LAST_STUDENT, JSON.stringify({ name: usuario.name, email: clean }))
-      .catch(() => { /* recordar es opcional */ });
+    await recordar(usuario, clean);
+    onLogin(usuario, clave);
+  }
+
+  /**
+   * Crea la cuenta y entra con ella.
+   *
+   * `registrar` vuelve con la sesión ya abierta, así que el resto es idéntico a
+   * entrar: recordar al estudiante y avisar a la raíz. No hace falta comprobar
+   * el rol: el servidor solo crea estudiantes por esta puerta.
+   */
+  async function crearCuenta(clave: string): Promise<void> {
+    const nombre = nombreNuevo.trim();
+    const correo = correoNuevo.trim().toLowerCase();
+    const usuario = await conReintentoDeRed(() => registrar(nombre, correo, clave));
+    await recordar(usuario, correo);
     onLogin(usuario, clave);
   }
 
@@ -191,43 +249,71 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
       </View>
 
       <View style={s.body}>
-        {/* Quién entra */}
-        <View>
-          <Eyebrow color={C.ink}>{askEmail ? "Escribe tu correo" : "Estás entrando como"}</Eyebrow>
-          {askEmail ? (
+        {modo === "registro" ? (
+          /* La cuenta nueva: nombre y correo. La clave va abajo, en el mismo
+             teclado que el ingreso, porque es la misma clave de cuatro
+             dígitos que va a teclear mañana para entrar. */
+          <View>
+            <Eyebrow color={C.ink}>Crea tu cuenta</Eyebrow>
             <View style={[s.mt8, s.emailBox, inset(4)]}>
               <TextInput
-                style={s.emailInput} value={email} onChangeText={setEmail}
+                style={s.emailInput} value={nombreNuevo} onChangeText={setNombreNuevo}
+                autoCapitalize="words" autoCorrect={false} maxLength={120}
+                placeholder="Tu nombre y apellido" placeholderTextColor={C.ghost}
+                accessibilityLabel="Nombre del estudiante"
+              />
+            </View>
+            <View style={[s.mt8, s.emailBox, inset(4)]}>
+              <TextInput
+                style={s.emailInput} value={correoNuevo} onChangeText={setCorreoNuevo}
                 autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
-                placeholder="usuario@tangram.edu" placeholderTextColor={C.ghost}
+                maxLength={254}
+                placeholder="tu-correo@colegio.edu" placeholderTextColor={C.ghost}
                 accessibilityLabel="Correo del estudiante"
               />
             </View>
-          ) : (
-            <Card style={s.mt8} depth={5} contentStyle={s.who}>
-              <View style={[s.initial, flat(C.accent, B.base)]}>
-                <Text style={display(20, C.ink)}>{account!.name.trim().charAt(0).toUpperCase()}</Text>
+          </View>
+        ) : (
+          /* Quién entra */
+          <View>
+            <Eyebrow color={C.ink}>{askEmail ? "Escribe tu correo" : "Estás entrando como"}</Eyebrow>
+            {askEmail ? (
+              <View style={[s.mt8, s.emailBox, inset(4)]}>
+                <TextInput
+                  style={s.emailInput} value={email} onChangeText={setEmail}
+                  autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
+                  placeholder="usuario@tangram.edu" placeholderTextColor={C.ghost}
+                  accessibilityLabel="Correo del estudiante"
+                />
               </View>
-              <View style={s.whoText}>
-                <Text style={s.whoName} numberOfLines={1}>{account!.name}</Text>
-                <Text style={s.whoMail} numberOfLines={1}>{account!.email}</Text>
-              </View>
-              <Pressable
-                onPress={() => { setEditing(true); setPin(""); }}
-                style={s.change} accessibilityRole="button"
-                accessibilityLabel="Entrar con otro correo"
-              >
-                <Text style={labelType(12, C.ink)}>Cambiar</Text>
-              </Pressable>
-            </Card>
-          )}
-        </View>
+            ) : (
+              <Card style={s.mt8} depth={5} contentStyle={s.who}>
+                <View style={[s.initial, flat(C.accent, B.base)]}>
+                  <Text style={display(20, C.ink)}>{account!.name.trim().charAt(0).toUpperCase()}</Text>
+                </View>
+                <View style={s.whoText}>
+                  <Text style={s.whoName} numberOfLines={1}>{account!.name}</Text>
+                  <Text style={s.whoMail} numberOfLines={1}>{account!.email}</Text>
+                </View>
+                <Pressable
+                  onPress={() => { setEditing(true); setPin(""); }}
+                  style={s.change} accessibilityRole="button"
+                  accessibilityLabel="Entrar con otro correo"
+                >
+                  <Text style={labelType(12, C.ink)}>Cambiar</Text>
+                </Pressable>
+              </Card>
+            )}
+          </View>
+        )}
 
         {/* Clave: cuatro huecos y el teclado, los dos de `components/Pin`. Los
             comparte con la pantalla de cambiar la clave, que los pide tres
             veces seguidas. */}
         <View>
-          <Eyebrow color={C.ink}>Escribe tu clave</Eyebrow>
+          <Eyebrow color={C.ink}>
+            {modo === "registro" ? "Elige tu clave: cuatro números" : "Escribe tu clave"}
+          </Eyebrow>
           <View style={s.mt8}>
             <PinBoxes value={pin} />
           </View>
@@ -240,9 +326,24 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
 
         <PinPad
           onDigit={press} onBackspace={backspace} onSubmit={submit}
-          canSubmit={pin.length === PIN_LENGTH} busy={submitting}
-          submitLabel="Entrar"
+          canSubmit={canSubmit} busy={submitting}
+          submitLabel={modo === "registro" ? "Crear cuenta" : "Entrar"}
         />
+
+        {/* La otra puerta. Un solo enlace que dice a dónde lleva: desde el
+            ingreso, a crear la cuenta; desde el registro, de vuelta a entrar. */}
+        <Pressable
+          onPress={() => cambiarModo(modo === "registro" ? "entrar" : "registro")}
+          style={s.alternar} accessibilityRole="button"
+          accessibilityLabel={modo === "registro" ? "Ya tengo cuenta, entrar" : "Crear una cuenta nueva"}
+        >
+          <Text style={s.alternarTexto}>
+            {modo === "registro" ? "¿Ya tienes cuenta?" : "¿Es tu primera vez?"}
+          </Text>
+          <Text style={labelType(12, C.ink)}>
+            {modo === "registro" ? "Entrar" : "Crear cuenta"}
+          </Text>
+        </Pressable>
 
         {/* Ajustes del servidor: discretos pero alcanzables */}
         <Pressable
@@ -304,6 +405,13 @@ const s = StyleSheet.create({
 
   errorBox:  { marginTop: 12, paddingVertical: 10, paddingHorizontal: 14 },
   error:     { fontFamily: F.bold, fontSize: 14, color: C.ink, textAlign: "center" },
+
+  // Mismo trazo que las filas de abajo (servidor, materiales): una pregunta a
+  // la izquierda y la acción a la derecha, sin placa, para no competir con el
+  // teclado que tiene encima.
+  alternar:      { flexDirection: "row", alignItems: "center", gap: S.sm,
+                   justifyContent: "center", paddingVertical: 4, minHeight: TAP.min },
+  alternarTexto: { fontFamily: F.regular, fontSize: 13, color: C.ink },
 
   server:    { marginTop: "auto", flexDirection: "row", alignItems: "center", gap: S.sm,
                paddingTop: 16, paddingBottom: 8, minHeight: TAP.min },

@@ -1,24 +1,69 @@
 /**
- * auth.routes.ts — inicio de sesión, refresco y cierre.
+ * auth.routes.ts — inicio de sesión, registro, refresco y cierre.
  *
  * `/token` recibe el formulario en `application/x-www-form-urlencoded` con los
  * campos `username` y `password`, y no JSON. Es herencia del
  * `OAuth2PasswordRequestForm` de FastAPI, y se conserva porque los dos clientes
  * ya envían así sus credenciales. La respuesta mantiene su forma exacta y suma
  * dos campos: el token de refresco y cuánto dura el de acceso.
+ *
+ * `/register` es la otra puerta de entrada: el estudiante se crea la cuenta
+ * desde la app y sale ya con sesión abierta, con la misma respuesta que
+ * `/token`. Va aquí y no en `students.routes.ts` porque aquello es el panel
+ * del docente —todo detrás de `exigirDocente`— y esto lo llama alguien que
+ * todavía no tiene ninguna cuenta con la que autenticarse.
  */
 import { Router } from "express";
 import { z } from "zod";
-import { revocarSesiones, verificarUsuario, buscarPorId } from "../db/users.js";
+import {
+  buscarPorId, crearEstudiante, esCorreoDuplicado, revocarSesiones, verificarUsuario,
+} from "../db/users.js";
 import { firmarAcceso, firmarRefresco, segundosDeVida, verificarRefresco } from "../auth/jwt.js";
 import { exigirSesion } from "../auth/middleware.js";
 import { comprobarIntentos, limpiarTrasExito, registrarIntento } from "../security/intentos.js";
 import { indiceCiego } from "../security/crypto.js";
-import { limiteLogin } from "../security/headers.js";
-import { HttpError, noAutorizado } from "../http/errors.js";
+import { limiteLogin, limiteRegistro } from "../security/headers.js";
+import { esClaveTrivial } from "../security/clave-temporal.js";
+import { config } from "../config.js";
+import { HttpError, noAutorizado, prohibido } from "../http/errors.js";
+import { esquemaDatosEstudiante, reglaClave } from "./esquemas.js";
 import type { Request } from "express";
+import type { Usuario } from "../types.js";
 
 export const rutasAuth = Router();
+
+/**
+ * La respuesta con la que se abre una sesión.
+ *
+ * La comparten `/token` y `/register` a propósito: la app móvil lee de las dos
+ * exactamente los mismos campos, y con dos literales separados el día que se
+ * añadiera uno al ingreso el registro se quedaría sin él y nadie lo notaría
+ * hasta que un niño recién registrado viera una pantalla en blanco.
+ */
+function respuestaDeSesion(usuario: Usuario) {
+  const identidad = {
+    id: usuario.id, name: usuario.name, role: usuario.role, ver: usuario.token_version,
+  };
+  return {
+    access_token: firmarAcceso(identidad),
+    refresh_token: firmarRefresco(identidad),
+    token_type: "bearer",
+    expires_in: segundosDeVida(),
+    role: usuario.role,
+    name: usuario.name,
+    id: usuario.id,
+    /**
+     * La cuenta todavía tiene la clave temporal que le puso el docente.
+     *
+     * Viaja en la respuesta del ingreso, y no dentro del token, porque el
+     * cliente tiene que saberlo **ahora** para llevar al estudiante a cambiarla
+     * en vez de al catálogo. Que el servidor además lo impida por su cuenta
+     * (ver `exigirClaveDefinitiva`) es lo que hace que este campo sea una
+     * comodidad de la interfaz y no la única barrera.
+     */
+    must_change_password: usuario.must_change_password,
+  };
+}
 
 /**
  * Correo y contraseña con topes de longitud.
@@ -70,28 +115,69 @@ rutasAuth.post("/token", limiteLogin, async (req, res) => {
 
   await limpiarTrasExito(ip, cuentaHash);
 
-  const identidad = {
-    id: usuario.id, name: usuario.name, role: usuario.role, ver: usuario.token_version,
-  };
-  res.json({
-    access_token: firmarAcceso(identidad),
-    refresh_token: firmarRefresco(identidad),
-    token_type: "bearer",
-    expires_in: segundosDeVida(),
-    role: usuario.role,
-    name: usuario.name,
-    id: usuario.id,
-    /**
-     * La cuenta todavía tiene la clave temporal que le puso el docente.
-     *
-     * Viaja en la respuesta del ingreso, y no dentro del token, porque el
-     * cliente tiene que saberlo **ahora** para llevar al estudiante a cambiarla
-     * en vez de al catálogo. Que el servidor además lo impida por su cuenta
-     * (ver `exigirClaveDefinitiva`) es lo que hace que este campo sea una
-     * comodidad de la interfaz y no la única barrera.
-     */
-    must_change_password: usuario.must_change_password,
-  });
+  res.json(respuestaDeSesion(usuario));
+});
+
+/**
+ * Nombre, correo y clave con los que el estudiante se registra.
+ *
+ * Son las mismas reglas del alta que hace el docente (`esquemas.ts`), con una
+ * diferencia: aquí la clave es obligatoria. No hay nadie a quien enseñarle una
+ * clave generada, así que la elige quien va a usarla.
+ */
+const esquemaRegistro = esquemaDatosEstudiante.extend({ password: reglaClave });
+
+/**
+ * Registro desde la app: el estudiante se crea la cuenta y entra en el acto.
+ *
+ * La cuenta nace **sin** clave temporal —`must_change_password = 0`— porque la
+ * clave la eligió su dueño: obligarle a cambiarla en la pantalla siguiente
+ * sería pedirle dos veces lo mismo. Y nace con el rol de estudiante y con
+ * ningún otro: el rol no viene en el cuerpo ni se lee de él, así que por esta
+ * puerta no se puede entrar como docente.
+ *
+ * Responde 201 con la misma forma que `/token`. La app no tiene que hacer un
+ * segundo viaje para entrar, y cualquier campo que lea del ingreso lo tiene
+ * también aquí (ver `respuestaDeSesion`).
+ *
+ * El correo repetido llega como 409, igual que en el alta del docente. Es el
+ * único caso en que se confirma que un correo existe, y se asume a propósito:
+ * el estudiante que se registra dos veces necesita saber que tiene que entrar
+ * y no volver a registrarse, y la alternativa —crear una cuenta duplicada o
+ * fallar sin decir por qué— le deja peor. Lo que sí queda tapado es el ingreso:
+ * ahí sigue sin distinguirse «no existe» de «clave mala».
+ */
+rutasAuth.post("/register", limiteRegistro, async (req, res) => {
+  if (!config.registroAbierto) {
+    throw prohibido(
+      "El registro desde la app está cerrado. Pídele tu cuenta al docente.",
+    );
+  }
+
+  const { name, email, password } = esquemaRegistro.parse(req.body);
+
+  // Mismo criterio que el generador de claves temporales: lo que el servidor
+  // se niega a repartir tampoco lo acepta cuando lo escribe un niño.
+  if (esClaveTrivial(password)) {
+    throw new HttpError(422, "Esa clave es muy fácil de adivinar. Elige otra.");
+  }
+
+  let id: number;
+  try {
+    id = await crearEstudiante(name, email, password, false);
+  } catch (error) {
+    if (esCorreoDuplicado(error)) {
+      throw new HttpError(409, "Ya hay una cuenta con ese correo. Entra con tu clave.");
+    }
+    throw error;
+  }
+
+  // Se relee de la base y no se arma a mano: la fila recién insertada es la
+  // que dice qué versión de sesión y qué nombre —ya recortado— lleva el token.
+  const usuario = await buscarPorId(id);
+  if (!usuario) throw new HttpError(500, "La cuenta se creó pero no se pudo leer");
+
+  res.status(201).json(respuestaDeSesion(usuario));
 });
 
 /**

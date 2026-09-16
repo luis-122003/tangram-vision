@@ -207,6 +207,18 @@ export const config = {
    */
   maxImagenMb: entero("MAX_IMAGE_MB", 12),
 
+  /**
+   * ¿Puede un estudiante crearse la cuenta él mismo desde la app?
+   *
+   * Abierto por defecto porque es el camino corto del aula: el niño escribe su
+   * nombre, su correo y elige su clave en el teléfono, y aparece en el panel
+   * del docente sin que este tenga que darlo de alta a mano. Se cierra con
+   * `ALLOW_SELF_REGISTRATION=0` cuando el docente prefiera que las cuentas
+   * solo salgan de su panel —un curso ya dado de alta entero, por ejemplo—.
+   * Cerrado, `POST /register` responde 403 y la app lo dice tal cual.
+   */
+  registroAbierto: bandera("ALLOW_SELF_REGISTRATION", true),
+
   red: {
     /**
      * Orígenes permitidos por CORS. En producción no puede quedar en '*': una
@@ -236,6 +248,13 @@ export const config = {
     predictPorMinuto: entero("RATE_LIMIT_PREDICT", 20),
     /** Intentos de inicio de sesión por IP en 15 minutos. */
     loginPorIp: entero("RATE_LIMIT_LOGIN_IP", 30),
+    /**
+     * Cuentas que puede crear una misma IP en una hora desde la app. Cada
+     * teléfono del aula tiene la suya en la red local, así que diez por hora
+     * cubren de sobra a un niño que se equivoca al escribir y vuelve a empezar,
+     * y frenan a quien quiera llenar la tabla de cuentas a golpe de script.
+     */
+    registroPorIp: entero("RATE_LIMIT_REGISTER_IP", 10),
     /** Filas máximas que devuelve un listado sin paginar. */
     filasPorPagina: entero("PAGE_SIZE", 100),
   },
