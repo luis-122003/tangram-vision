@@ -13,13 +13,20 @@ import Silhouette from "../components/Silhouette";
 import TangramPiece from "../components/TangramPiece";
 import Icon from "../components/Icon";
 import {
-  Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton,
+  Bar, Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton,
 } from "../components/ui";
 import {
-  C, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY,
-  cardColor, display, shout, formatTime, tabular,
+  C, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY, TOTAL_PIECES, pieceCount,
+  cardColor, display, shout, formatTime, pct, tabular,
   raised, flat, onFill,
 } from "../theme";
+
+/**
+ * Umbral de acierto si el servidor no manda `match_threshold` (un backend
+ * anterior). Solo sirve para dibujar la marca de la barra: el veredicto lo
+ * decide siempre el servidor con el suyo.
+ */
+const MATCH_IOU_FALLBACK = 0.75;
 
 /**
  * Alturas de las dos barras que se dibujan sobre la cámara.
@@ -635,22 +642,78 @@ export default function GameScreen({
   if (!result) return <View style={s.center}><ActivityIndicator color={C.ink} size="large" /></View>;
 
   /**
-   * Lo que ve el estudiante es un veredicto y **una sola pista**.
+   * Lo primero que ve el estudiante es un veredicto y **una sola pista**.
    *
-   * Antes esta pantalla enseñaba el diagnóstico completo del validador: el
-   * porcentaje de parecido, las cinco comprobaciones una por una, el inventario
-   * de fichas detectadas y la cobertura por franjas de la silueta. Todo eso es
-   * cierto y todo eso sirve —para el docente—. Delante de un niño de primaria
-   * hacía tres cosas malas a la vez: convertía armar un Tangram en una nota
-   * («68 %»), le daba cinco frentes por los que empezar a corregir en vez de
-   * uno, y enseñaba tanta tripa del sistema que la pregunta dejaba de ser «¿qué
-   * acomodo?» para pasar a ser «¿qué significa IoU?».
+   * La pista va arriba y sola porque es lo que un niño de primaria puede hacer
+   * al levantarse de la silla: mover una ficha. Debajo, y solo debajo, va la
+   * **revisión completa** del validador —el parecido con su umbral, la figura
+   * armada sobre el modelo, las cinco comprobaciones una por una, las fichas
+   * que la cámara encontró, la franja peor cubierta y lo que dice el revisor—.
+   * Es el «por qué» de la pista, y se enseña aunque la figura esté lograda:
+   * ver las cinco marcas en verde es parte del refuerzo, y el docente que mira
+   * el teléfono junto al niño necesita las cifras sin ir al panel.
    *
-   * El diagnóstico no se pierde: sigue llegando entero en la respuesta y sigue
-   * guardándose en `sessions`, que es de donde lo lee el panel del docente. Lo
-   * que cambia es quién lo lee.
+   * Cuando la foto no sirvió (`detection_ok` en falso) la revisión no se
+   * pinta como si se hubiera hecho: dos fichas sueltas nunca se pisan entre sí
+   * y las comprobaciones saldrían «bien» por vacuidad. En su lugar se dice qué
+   * alcanzó a ver la cámara y por qué no se pudo revisar más.
    */
   const ok = result.match;
+  const threshold = result.match_threshold ?? MATCH_IOU_FALLBACK;
+  const missing = result.pieces?.missing ?? {};
+  const extra = result.pieces?.extra ?? {};
+  const missingCount = Object.values(missing).reduce((a, b) => a + b, 0);
+  const missingNames = Object.entries(missing)
+    .map(([kind, n]) => pieceCount(kind, n))
+    .join(", ");
+
+  // Las cinco cosas que tiene que cumplir un Tangram bien armado, cada una con
+  // su cifra: es lo que convierte el porcentaje en algo accionable.
+  const checks = result.checks;
+  const checkRows = checks ? [
+    {
+      key: "inventory", ok: checks.inventory.ok, label: "Usaste las 7 fichas",
+      detail: `${checks.inventory.counted} de ${checks.inventory.expected}`,
+    },
+    {
+      key: "overlap", ok: checks.overlap.ok, label: "Ninguna ficha encima de otra",
+      detail: checks.overlap.ok ? "Bien" : `${pct(checks.overlap.fraction)} montado`,
+    },
+    {
+      key: "holes", ok: checks.holes.ok, label: "Sin espacios vacíos",
+      detail: checks.holes.ok
+        ? "Bien"
+        : checks.holes.count === 1 ? "1 hueco" : `${checks.holes.count} huecos`,
+    },
+    {
+      key: "connectivity", ok: checks.connectivity.ok, label: "Todas las fichas juntas",
+      detail: checks.connectivity.ok
+        ? "Bien"
+        : checks.connectivity.loose === 1 ? "1 suelta" : `${checks.connectivity.loose} sueltas`,
+    },
+    {
+      key: "shape", ok: checks.shape.ok, label: "Se parece al modelo",
+      detail: pct(checks.shape.iou),
+    },
+  ] : [];
+
+  // Se dibujan las 7 fichas esperadas y se marcan como ausentes tantas de cada
+  // tipo como diga `pieces.missing`.
+  const slots: { kind: string; missing: boolean }[] = [];
+  for (const p of PIECE_INVENTORY) {
+    const gone = missing[p.kind] ?? 0;
+    for (let i = 0; i < p.count; i++) slots.push({ kind: p.kind, missing: i >= p.count - gone });
+  }
+
+  const worst = result.segments.length
+    ? result.segments.reduce((a, b) => (b.coverage < a.coverage ? b : a))
+    : null;
+  // Semáforo por franja: verde lo bien cubierto, amarillo lo regular, rojo lo
+  // que hay que revisar. Los umbrales 0,85 y 0,6 no se tocan: están espejados
+  // en los mensajes que redacta el backend. Y la cifra en porcentaje va siempre
+  // al lado, porque el color no puede ser el único canal.
+  const bandColor = (coverage: number) =>
+    coverage >= 0.85 ? C.success : coverage >= 0.6 ? C.warning : C.danger;
 
   // El detector no vio Tangram suficiente como para juzgar nada. No es lo mismo
   // que una figura mal armada, y la diferencia le importa al niño: en un caso
@@ -742,6 +805,157 @@ export default function GameScreen({
             </Text>
           </View>
         </Card>
+
+        {/* ── Revisión completa ─────────────────────────────────────────────
+            El «por qué» de la pista de arriba, con sus cifras. Va después de
+            ella y del tiempo a propósito: primero lo que hay que hacer, luego
+            lo que se midió. */}
+        <View style={[s.gap, s.sectionHead]}>
+          <Icon name="layers" size={18} color={C.ink} />
+          <Eyebrow>Revisión completa</Eyebrow>
+        </View>
+
+        {/* Parecido con el modelo. La marca de la barra es el umbral del
+            servidor: la cifra sola no dice cuánto falta. Si la foto no sirvió,
+            el porcentaje sale de una silueta incompleta y no se enseña como si
+            fuera una medida. */}
+        <Card style={s.gapSm} sunken depth={4} contentStyle={s.metrics}>
+          <View style={s.metric}>
+            <Eyebrow>Parecido con el modelo</Eyebrow>
+            {fotoIlegible ? (
+              <>
+                <Text style={[display(28), s.metricValue]}>—</Text>
+                <Text style={s.metricHint}>
+                  No se pudo medir: la cámara vio{" "}
+                  {result.coverage !== undefined
+                    ? `${Math.round(result.coverage * TOTAL_PIECES)} de ${TOTAL_PIECES} fichas`
+                    : "muy pocas fichas"}
+                  , y con eso el parecido no es fiable.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={[display(28), s.metricValue, tabular]}>{pct(result.iou_score)}</Text>
+                <Bar value={result.iou_score} mark={threshold} tone={ok ? "success" : "warning"} />
+                <Text style={s.metricHint}>
+                  {ok
+                    ? `Superaste el mínimo (${pct(threshold)}).`
+                    : `La marca (${pct(threshold)}) es lo mínimo que necesitas.`}
+                </Text>
+              </>
+            )}
+          </View>
+        </Card>
+
+        {/* Revisión punto por punto. Con la foto ilegible no se pinta: saldría
+            todo «bien» por vacuidad y afirmaría algo que nadie midió. */}
+        {fotoIlegible ? (
+          <Card style={s.gapSm} contentStyle={s.checksCard}>
+            <Eyebrow style={s.piecesTitle}>Revisión de tu armado</Eyebrow>
+            <Text style={s.framingText}>
+              No se pudo revisar. La cámara encontró {result.pieces_used} de{" "}
+              {TOTAL_PIECES} fichas y para revisar el armado hacen falta casi
+              todas. Repite la foto con buena luz, fondo liso y sin manos.
+            </Text>
+          </Card>
+        ) : checkRows.length > 0 && (
+          <Card style={s.gapSm} contentStyle={s.checksCard}>
+            <Eyebrow style={s.piecesTitle}>Revisión de tu armado</Eyebrow>
+            {checkRows.map(row => (
+              // Verde lo superado, amarillo lo que falta. La marca va sin
+              // sombra: son cinco filas seguidas, y cinco sombras en una lista
+              // tan corta se leen como ruido. El icono y el detalle escrito
+              // dicen cuál es cuál sin depender del color.
+              <View key={row.key} style={s.checkRow}>
+                <View style={[s.checkMark, flat(row.ok ? C.success : C.warning, 2)]}>
+                  <Icon
+                    name={row.ok ? "check" : "bang"} size={13}
+                    color={C.ink} strokeWidth={3.6}
+                  />
+                </View>
+                <Text style={s.checkLabel} numberOfLines={1}>{row.label}</Text>
+                <Text style={[s.checkValue, !row.ok && s.checkValueOff]}>
+                  {row.detail}
+                </Text>
+              </View>
+            ))}
+            {ok && checkRows.some(r => !r.ok) && (
+              <Text style={s.checkHint}>
+                Alguna comprobación salió en amarillo, pero tu figura calzó con
+                el modelo: cuenta como lograda. Suele ser una ficha que la
+                cámara no vio bien.
+              </Text>
+            )}
+          </Card>
+        )}
+
+        {/* Fichas detectadas por el modelo */}
+        <Card style={s.gapSm} contentStyle={s.piecesCard}>
+          <View style={s.piecesHead}>
+            <Eyebrow>Fichas detectadas</Eyebrow>
+            {/* `pieces_used` es lo que contó el detector: con fichas de más
+                dirá "9 de 7", que es justo lo que hay que contarle. */}
+            <Text style={[display(15, C.ink), tabular]}>
+              {result.pieces_used} de {TOTAL_PIECES}
+            </Text>
+          </View>
+          <View style={s.piecesRow}>
+            {slots.map((slot, i) => (
+              <TangramPiece
+                key={i} kind={slot.kind} size={34}
+                missing={slot.missing}
+              />
+            ))}
+          </View>
+          {missingCount > 0 && (
+            <View style={s.legend}>
+              <View style={s.legendMark} />
+              <Text style={s.legendText}>
+                La punteada es la que la cámara no encontró: {missingNames}
+              </Text>
+            </View>
+          )}
+          {Object.keys(extra).length > 0 && (
+            <View style={s.legend}>
+              <Text style={s.legendText}>
+                Hay fichas de más en la foto. Deja sobre la mesa solo las 7 del Tangram.
+              </Text>
+            </View>
+          )}
+        </Card>
+
+        {/* Qué parte revisar: franjas de cobertura del backend. Señalar un
+            tercio concreto solo ayuda si el resto ya calza; con un parecido
+            bajo el problema está en casi todas las fichas. */}
+        {!ok && !fotoIlegible && (checks ? checks.shape.close : true) && result.segments.length > 0 && (
+          <Card style={s.gapSm} contentStyle={s.bandsCard}>
+            <Eyebrow style={s.piecesTitle}>Qué parte revisar</Eyebrow>
+            <View style={s.bandsRow}>
+              <Silhouette
+                figure={figure} size={140}
+                bands={result.segments.map(seg => bandColor(seg.coverage))}
+              />
+              <View style={s.bandsList}>
+                {result.segments.map(seg => (
+                  <View key={seg.label} style={s.band}>
+                    {/* El color va en la muestra, nunca en el texto: un amarillo
+                        sobre el papel no se lee. La peor franja va en negrita. */}
+                    <View style={[s.bandSwatch, flat(bandColor(seg.coverage), 2)]} />
+                    <Text style={[
+                      s.bandLabel,
+                      seg === worst && s.bandLabelWorst,
+                    ]} numberOfLines={1}>
+                      {seg.label.replace("Parte de ", "").replace("Parte del ", "")}
+                    </Text>
+                    <Text style={[display(17, C.ink), tabular]}>
+                      {pct(seg.coverage)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </Card>
+        )}
 
         {/* El intento no llegó al servidor. Va justo encima de las acciones, que
             es donde el estudiante decide seguir: enterarse después de haber
@@ -992,6 +1206,38 @@ const s = StyleSheet.create({
   metricSide:{ width: 118, padding: 14 },
   metricValue:{ marginTop: 4, marginBottom: 10 },
   metricHint:{ fontFamily: F.regular, fontSize: 12, color: C.muted, marginTop: 8 },
+
+  // Revisión completa
+  gapSm:     { marginTop: S.md },
+  sectionHead:{ flexDirection: "row", alignItems: "center", gap: S.sm, marginBottom: 2 },
+
+  piecesHead:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+               marginBottom: S.md - 2 },
+  legend:    { flexDirection: "row", alignItems: "center", gap: S.sm, marginTop: 14,
+               paddingTop: 12 },
+  legendMark:{ width: 16, height: 16, borderWidth: 2,
+               borderColor: C.ink, borderStyle: "dashed" },
+  // Frases explicativas, no rótulos: para primaria no bajan de 14.
+  legendText:{ flex: 1, fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.ink },
+
+  checksCard:{ padding: 16 },
+  checkRow:  { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 7 },
+  checkMark: { width: 24, height: 24, alignItems: "center", justifyContent: "center" },
+  checkLabel:{ flex: 1, fontFamily: F.regular, fontSize: 14, color: C.ink },
+  checkValue:{ fontFamily: F.bold, fontSize: 13, color: C.muted },
+  checkValueOff:{ color: C.ink },
+  checkHint: { fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.ink,
+               paddingTop: 12, marginTop: 8 },
+
+  bandsCard: { padding: 16 },
+  bandsRow:  { flexDirection: "row", alignItems: "center", gap: S.lg },
+  bandsList: { flex: 1, gap: 14 },
+  band:      { flexDirection: "row", alignItems: "center", gap: 10 },
+  bandSwatch:{ width: 14, height: 14 },
+  bandLabel: { flex: 1, fontFamily: F.regular, fontSize: 13, color: C.ink,
+               textTransform: "capitalize" },
+  /** La peor franja se destaca con negrita, nunca con color de texto. */
+  bandLabelWorst:{ fontFamily: F.bold },
 
   saveCard:  { padding: 16 },
   saveAction:{ marginTop: 14 },

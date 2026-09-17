@@ -66,6 +66,41 @@ export interface Figure {
   silhouette:    [number, number][];
 }
 
+/**
+ * Lo que devuelve `POST /figures/silhouette`: la silueta que el detector sacó
+ * de la foto de una figura armada, y qué alcanzó a ver para sacarla.
+ *
+ * `silhouette` llega en el mismo formato que `Figure.silhouette`, así que se
+ * puede dibujar con el mismo componente y guardar tal cual. `pieces.complete`
+ * es la condición para guardar: una referencia sacada de seis fichas es una
+ * figura contra la que ningún niño podrá acertar.
+ */
+export interface SilhouetteResult {
+  silhouette:    [number, number][];
+  pieces_used:   number;
+  coverage:      number;
+  detection_ok:  boolean;
+  pieces: {
+    detected: Record<string, number>;
+    total:    number;
+    missing:  Record<string, number>;
+    extra:    Record<string, number>;
+    complete: boolean;
+  };
+  warnings:      string[];
+  processing_ms: number;
+}
+
+/** Datos con los que el docente da de alta una figura (`POST /figures`). */
+export interface NewFigure {
+  name:        string;
+  category:    Category;
+  difficulty:  Difficulty;
+  emoji?:      string;
+  description?: string;
+  silhouette:  [number, number][];
+}
+
 // ─── Predicción (/predict) ──────────────────────────────────────────────────────
 export interface Segment {
   label:    string;

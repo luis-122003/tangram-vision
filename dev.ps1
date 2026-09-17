@@ -121,7 +121,17 @@ if (-not $SoloApi) {
 
 Write-Host ""
 Write-Host "Comprobando..." -ForegroundColor Cyan
-Esperar "http://127.0.0.1:8001/health" "servicio de visión  http://127.0.0.1:8001" | Out-Null
+# A visión se le dan tres minutos y no uno: cargar PyTorch y el detector en
+# frío —la primera vez tras reiniciar, con el antivirus revisando cada DLL—
+# supera con facilidad los 60 s, y con el tope corto el script declaraba «modo
+# demostración» sobre un servicio que terminaba de arrancar medio minuto después.
+# El backend no hay que reiniciarlo: pregunta a visión en cada foto, así que en
+# cuanto el servicio aparece, las fotos se analizan de verdad.
+$visionLista = Esperar "http://127.0.0.1:8001/health" "servicio de visión  http://127.0.0.1:8001" 180
+if (-not $visionLista) {
+    Write-Host "       Mira su ventana: si sigue cargando el modelo, espera y vuelve a abrir" -ForegroundColor Yellow
+    Write-Host "       http://127.0.0.1:8001/health. Si muestra un error, ese es el problema." -ForegroundColor Yellow
+}
 if (Esperar "http://127.0.0.1:8000/health" "backend             http://localhost:8000") {
     $salud = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health"
     Write-Host ""
@@ -154,3 +164,64 @@ if (Esperar "http://127.0.0.1:8000/health" "backend             http://localhost
     }
 }
 if (-not $SoloApi) { Write-Host "  frontend            http://localhost:5173" }
+
+# ─── Dónde está cada cosa ────────────────────────────────────────────────────
+# Las direcciones, cada una con lo que hay detrás. Es lo que se busca al
+# terminar de arrancar: qué abrir en el navegador para el panel del docente,
+# qué escribir en Ajustes de la app del teléfono. Antes había que deducirlo de
+# tres líneas sueltas de "[OK]" y del README.
+#
+# La IP de la red se calcula ahora y no se guarda en ningún archivo: una
+# dirección solo vale en la red donde se leyó, y publicarla en el repositorio
+# describe esa red a cualquiera. Se descartan las interfaces virtuales
+# (vEthernet de WSL/Hyper-V, VirtualBox, VMware): el teléfono no llega por ahí.
+function IpsDeRed {
+    try {
+        Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object {
+                $_.IPAddress -notlike "127.*" -and
+                $_.IPAddress -notlike "169.254.*" -and
+                $_.InterfaceAlias -notmatch "vEthernet|Loopback|VirtualBox|VMware|Bluetooth" -and
+                $_.PrefixOrigin -in @("Dhcp", "Manual")
+            } | Select-Object -ExpandProperty IPAddress
+    } catch { @() }
+}
+
+function Fila($que, $url, $nota) {
+    Write-Host ("  {0,-26}" -f $que) -NoNewline -ForegroundColor White
+    Write-Host ("{0,-38}" -f $url) -NoNewline -ForegroundColor Cyan
+    if ($nota) { Write-Host $nota -ForegroundColor DarkGray } else { Write-Host "" }
+}
+
+Write-Host ""
+Write-Host "Direcciones" -ForegroundColor Cyan
+Write-Host ("  " + ("-" * 74)) -ForegroundColor DarkGray
+if (-not $SoloApi) {
+    Fila "Dashboard del maestro"   "http://localhost:5173"        "entra como docente: pestañas Intentos y Estudiantes"
+    Fila "Web del estudiante"      "http://localhost:5173"        "misma dirección; entra con una cuenta de estudiante"
+}
+Fila "API (backend)"          "http://localhost:8000"        "lo que consumen la web y la app"
+Fila "Estado del sistema"     "http://localhost:8000/health" "MySQL, detector, almacén de fotos y umbral"
+Fila "Servicio de visión"     "http://127.0.0.1:8001/health" "YOLOv8s-seg + validador geométrico"
+
+$ips = @(IpsDeRed)
+if ($ips.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  Para la app del teléfono (mismo WiFi que esta PC):" -ForegroundColor White
+    foreach ($ip in $ips) {
+        Fila "  Servidor en Ajustes" "http://${ip}:8000" "la app también lo busca sola al arrancar"
+    }
+    if (-not $SoloApi) {
+        foreach ($ip in $ips) {
+            Fila "  Web desde otro equipo" "http://${ip}:5173" "el dashboard del maestro desde un portátil o tableta"
+        }
+    }
+} else {
+    Write-Host ""
+    Write-Host "  [!] No se encontró ninguna IP de red: sin WiFi, el teléfono no puede conectarse." -ForegroundColor Yellow
+}
+Write-Host ""
+Write-Host "  Cuentas de demostración (si la base se sembró): docente@tangram.edu y" -ForegroundColor DarkGray
+Write-Host "  estudiante@tangram.edu, clave 1234. El estudiante puede además crearse" -ForegroundColor DarkGray
+Write-Host "  la cuenta desde la app (Crear cuenta) y aparece en el panel del maestro." -ForegroundColor DarkGray
+Write-Host ""

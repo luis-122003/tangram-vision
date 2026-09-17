@@ -99,6 +99,24 @@ const docSesion = await pedir("/sessions", {
 });
 comprobar("el docente no puede registrar intentos", docSesion.code === 403);
 
+// El catálogo lo administra el docente: extraer siluetas, dar de alta figuras
+// y ocultarlas son tres puertas que un estudiante no debe poder abrir. Se
+// prueba con cuerpos válidos para que el 403 sea por el rol y no por un 422.
+const estTok = auth(est.cuerpo.access_token);
+const siluetaEst = await pedir("/figures/silhouette", {
+  method: "POST", headers: estTok, body: JSON.stringify({ image_b64: "x" }),
+});
+comprobar("el estudiante no puede extraer siluetas de figuras", siluetaEst.code === 403, `HTTP ${siluetaEst.code}`);
+const altaEst = await pedir("/figures", {
+  method: "POST", headers: estTok,
+  body: JSON.stringify({ name: "Prueba", category: "Objetos", difficulty: "Fácil", silhouette: [[0, 0], [1, 0], [0.5, 1]] }),
+});
+comprobar("el estudiante no puede crear figuras", altaEst.code === 403, `HTTP ${altaEst.code}`);
+const ocultarEst = await pedir("/figures/triangle", {
+  method: "PATCH", headers: estTok, body: JSON.stringify({ enabled: false }),
+});
+comprobar("el estudiante no puede ocultar figuras", ocultarEst.code === 403, `HTTP ${ocultarEst.code}`);
+
 console.log("\n=== 4. Validación de la foto (subidas) ===");
 const noEsImagen = await pedir("/predict", {
   method: "POST", headers: auth(tEst),

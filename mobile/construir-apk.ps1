@@ -148,6 +148,12 @@ if (-not $SoloCopiar) {
         #
         # Lo que decide si el build salió bien es el código de salida, que se
         # comprueba justo después. Las líneas de texto son texto.
+        # El SDK que se encontró arriba se le pasa también a Gradle. Sin esto,
+        # el script sabía dónde estaba el SDK y Gradle no: `expo prebuild`
+        # borra android\local.properties, y el build fallaba con "SDK location
+        # not found" justo después de regenerar la carpeta nativa.
+        $env:ANDROID_HOME = $sdk
+
         $previo = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {

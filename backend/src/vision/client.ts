@@ -190,6 +190,44 @@ export function analizar(peticion: PeticionAnalisis): Promise<Record<string, unk
   );
 }
 
+/** Lo que devuelve `/silhouette`: la silueta de una figura nueva y qué se vio. */
+export interface SiluetaExtraida {
+  /** Polígono 0..1 listo para `figures.silhouette`; vacío si no se pudo formar. */
+  silhouette: Punto[];
+  pieces_used: number;
+  coverage: number;
+  detection_ok: boolean;
+  pieces: {
+    detected: Record<string, number>;
+    total: number;
+    missing: Record<string, number>;
+    extra: Record<string, number>;
+    complete: boolean;
+  };
+  warnings: string[];
+  processing_ms: number;
+}
+
+/**
+ * Extrae de una foto la silueta de referencia de una figura nueva.
+ *
+ * Es lo que el panel del docente llama antes de guardar una figura: el mismo
+ * detector que califica los intentos, pero sin figura objetivo, porque aquí lo
+ * que se está fabricando **es** la figura objetivo. Sin reintento: la llama un
+ * docente mirando la pantalla, que puede volver a pulsar.
+ */
+export function extraerSilueta(image_b64: string): Promise<SiluetaExtraida> {
+  return pedir(
+    "/silhouette",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_b64 }),
+    },
+    { timeoutMs: config.vision.timeoutMs },
+  );
+}
+
 /**
  * Estado del detector, para `/health`. Con un tope corto y sin propagar el
  * error: que el servicio de visión esté caído es justo lo que `/health` existe

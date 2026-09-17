@@ -604,6 +604,9 @@ explica que no cuenta en contra.
 | GET    | `/health`                  | público           | MySQL, detector, almacén de fotos, umbral y cómo se compara |
 | GET    | `/figures`                 | autenticado       | Catálogo de figuras activas con sus siluetas   |
 | GET    | `/figures?all=true`        | autenticado       | Incluye también las figuras desactivadas       |
+| POST   | `/figures/silhouette`      | **docente**       | Extrae de una foto la silueta de una figura nueva (sin guardar) |
+| POST   | `/figures`                 | **docente**       | Alta de una figura con su silueta; el slug lo elige el servidor |
+| PATCH  | `/figures/{slug}`          | **docente**       | Oculta o vuelve a mostrar una figura (no se borra) |
 | POST   | `/predict`                 | autenticado       | Valida una foto contra la figura objetivo      |
 | POST   | `/sessions`                | **estudiante**    | Registra el intento (el alumno sale del token) |
 | GET    | `/sessions`                | **docente**       | Historial de todo el curso, paginado           |
@@ -628,6 +631,23 @@ por igual: la diferencia es que la cuenta registrada desde la app nace ya con el
 perfil activo, porque la clave la eligió su dueño. El registro está limitado por
 IP (`RATE_LIMIT_REGISTER_IP`), rechaza las claves triviales que el generador
 tampoco reparte (`1111`, `1234`…) y se cierra con `ALLOW_SELF_REGISTRATION=0`.
+
+**Añadir figuras desde el panel.** El docente tiene una pestaña **Figuras** con
+los pasos para hacer bien la foto, un formulario (nombre, categoría, dificultad,
+emoji) y un botón para subir la foto de la figura armada. No hay que entrenar
+nada: el detector reconoce **fichas**, no figuras, y lo que distingue una figura
+de otra es su polígono de referencia. `POST /figures/silhouette` corre el mismo
+detector sobre la foto, une las máscaras de las fichas y devuelve ese polígono
+normalizado; la web lo dibuja como **silueta sintética** —la misma imagen que
+verá el estudiante en el catálogo— y solo deja guardar si la cámara vio las 7
+fichas (una referencia sacada de seis es una figura contra la que nadie podrá
+acertar). Al guardar, `POST /figures` la inserta activa en la tabla `figures` y
+aparece de inmediato en la app y en la web. Las figuras del panel viven solo en
+MySQL: `figures_seed.json` es la siembra de una instalación nueva y no se toca.
+No hay `DELETE`: los intentos guardados apuntan al slug, así que una figura se
+**oculta** (`PATCH /figures/{slug}`), igual que las 13 antiguas sin respaldo
+experimental. Comprobado con la foto real de una vela: extraída, guardada y
+enviada de vuelta a `/predict` contra su propia figura nueva da IoU 0,975.
 
 **La foto del intento.** `/predict` devuelve `image_path`: la ruta donde quedó
 guardada la foto, o `null` si no se guardó. El cliente la devuelve tal cual en el

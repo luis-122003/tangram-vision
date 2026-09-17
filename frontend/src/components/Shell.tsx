@@ -7,6 +7,7 @@ import Logo from "./Logo";
 import MaterialsButton from "./MaterialsPanel";
 import StudentHome from "./StudentHome";
 import StudentsAdmin from "./StudentsAdmin";
+import FiguresAdmin from "./FiguresAdmin";
 import TeacherDashboard from "./TeacherDashboard";
 import type { Figure, User } from "../types";
 
@@ -31,30 +32,36 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
    */
   const esDocente = user.role === ROLES.TEACHER;
 
-  const [view,      setView]      = useState<"home" | "game" | "dashboard" | "students">(
+  const [view,      setView]      = useState<"home" | "game" | "dashboard" | "students" | "figures">(
     esDocente ? "dashboard" : "home",
   );
   const [activeFig, setActiveFig] = useState<Figure | null>(null);
   const [figures,      setFigures]      = useState<Figure[]>([]);
   const [figuresError, setFiguresError] = useState("");
 
-  // El catálogo de figuras objetivo (con sus siluetas) vive en MySQL.
+  // El catálogo de figuras objetivo (con sus siluetas) vive en MySQL. Se
+  // vuelve a pedir cuando el docente añade u oculta una figura desde su
+  // pestaña (`recarga`): las demás pestañas —el registro de intentos, que
+  // nombra las figuras por su slug— tienen que verla sin recargar la página.
+  const [recarga, setRecarga] = useState(0);
   useEffect(() => {
     let cancelled = false;
     getFigures()
       .then(data => { if (!cancelled) setFigures(data); })
       .catch(err => { if (!cancelled) setFiguresError(err.message ?? "Error de conexión"); });
     return () => { cancelled = true; };
-  }, []);
+  }, [recarga]);
 
-  // El docente tiene dos vistas y no una: el registro de intentos responde
-  // «cómo va el curso», y la gestión de estudiantes «quién está en el curso».
-  // Son dos preguntas distintas y mezclarlas en una sola tabla dejaba el alta
-  // de cuentas sin ningún sitio donde vivir.
+  // El docente tiene tres vistas y no una: el registro de intentos responde
+  // «cómo va el curso», la gestión de estudiantes «quién está en el curso» y
+  // la de figuras «qué se arma en el curso». Son preguntas distintas y
+  // mezclarlas en una sola tabla dejaba el alta de cuentas —y ahora la de
+  // figuras— sin ningún sitio donde vivir.
   const tabs = esDocente
     ? [
         { id: "dashboard" as const, label: "Intentos" },
         { id: "students"  as const, label: "Estudiantes" },
+        { id: "figures"   as const, label: "Figuras" },
       ]
     : [{ id: "home" as const, label: "Mis figuras" }];
 
@@ -130,6 +137,7 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
         {view === "game"      && activeFig && <GameScreen user={user} figure={activeFig} onExit={() => setView("home")} />}
         {view === "dashboard" && esDocente && <TeacherDashboard figures={figures} />}
         {view === "students"  && esDocente && <StudentsAdmin />}
+        {view === "figures"   && esDocente && <FiguresAdmin onChanged={() => setRecarga(n => n + 1)} />}
       </main>
     </div>
   );

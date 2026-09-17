@@ -304,6 +304,53 @@ def decode_image(b64_str: str) -> np.ndarray | None:
 
 
 # ─── Endpoint principal ─────────────────────────────────────────────────────────
+def detectar_fichas(imagen: np.ndarray) -> tuple[list[tv.Deteccion], list[str]]:
+    """Corre el detector sobre una imagen y devuelve las fichas ya depuradas.
+
+    Vive fuera de `/analyze` porque lo usan dos endpoints: la calificación de
+    un intento y la extracción de la silueta de una figura nueva. Con la
+    clausura que había antes, la segunda habría tenido que copiar estas
+    líneas —y la reparación de cuadriláteros, que es lo que sostiene el
+    inventario, se habría quedado en una sola de las dos copias.
+    """
+    det = yolo_model.predict(source=imagen, conf=YOLO_CONF,
+                             imgsz=YOLO_IMGSZ, max_det=30, verbose=False)
+    piezas, avs = pipeline.desde_yolo(det[0]) if det else ([], [])
+    piezas = pipeline.descartar_duplicados(piezas)
+    # `descartar_duplicados` quita las cajas que se pisan, pero no ve los
+    # dos fallos que el detector comete con las fichas de cuatro lados:
+    # parte el romboide por su diagonal en dos triangulos pequenos, y
+    # cuando si acierta el cuadrilatero duda entre cuadrado y romboide
+    # con confianzas de 0.48. Medido sobre las 114 fotos reales, esto
+    # lleva el inventario correcto de 0 a 98 de 114.
+    return tv.reparar_cuadrilateros(piezas), avs
+
+
+def detectar_con_recorte(
+    img: np.ndarray, crop: list[float] | None,
+) -> tuple[np.ndarray, bool, list[tv.Deteccion], list[str]]:
+    """Recorta al recuadro que vio el usuario, detecta y, si no hay nada, reintenta entero.
+
+    Devuelve (imagen analizada, si quedó recortada, detecciones, avisos).
+
+    La salvaguarda es la de siempre: si dentro del recuadro no se vio nada
+    pero en la foto completa sí, el recorte estaba mal (la app calcula el
+    recuadro a partir del encuadre de la pantalla, que no siempre coincide con
+    el del sensor). Antes de darle un «no vi tus fichas» a quien sí las armó,
+    se reintenta con la foto entera.
+    """
+    recorte, recortada, avisos = pipeline.recortar(img, crop)
+    detecciones, avs = detectar_fichas(recorte)
+    avisos += avs
+    if recortada and not detecciones:
+        detecciones, avs = detectar_fichas(img)
+        if detecciones:
+            recorte, recortada = img, False
+            avisos.append("Las fichas quedaron fuera del recuadro: se analizó la foto completa.")
+        avisos += avs
+    return recorte, recortada, detecciones, avisos
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
     t0 = time.time()
@@ -329,34 +376,7 @@ async def analyze(req: AnalyzeRequest):
         resultado, silueta, objetivo = pipeline.validacion_simulada(figure)
         confianza = 0.72 + random.random() * 0.2
     else:
-        def detectar(imagen):
-            det = yolo_model.predict(source=imagen, conf=YOLO_CONF,
-                                     imgsz=YOLO_IMGSZ, max_det=30, verbose=False)
-            piezas, avs = pipeline.desde_yolo(det[0]) if det else ([], [])
-            piezas = pipeline.descartar_duplicados(piezas)
-            # `descartar_duplicados` quita las cajas que se pisan, pero no ve los
-            # dos fallos que el detector comete con las fichas de cuatro lados:
-            # parte el romboide por su diagonal en dos triangulos pequenos, y
-            # cuando si acierta el cuadrilatero duda entre cuadrado y romboide
-            # con confianzas de 0.48. Medido sobre las 114 fotos reales, esto
-            # lleva el inventario correcto de 0 a 98 de 114.
-            return tv.reparar_cuadrilateros(piezas), avs
-
-        recorte, recortada, avisos = pipeline.recortar(img, req.crop)
-        detecciones, avs = detectar(recorte)
-        avisos += avs
-
-        # Salvaguarda: si dentro del recuadro no se vio nada pero en la foto
-        # completa sí, el recorte estaba mal (la app calcula el recuadro a partir
-        # del encuadre de la pantalla, que no siempre coincide con el del sensor).
-        # Antes de darle un «no vi tus fichas» a un niño que sí las armó, se
-        # reintenta con la foto entera.
-        if recortada and not detecciones:
-            detecciones, avs = detectar(img)
-            if detecciones:
-                recorte, recortada = img, False
-                avisos.append("Las fichas quedaron fuera del recuadro: se analizó la foto completa.")
-            avisos += avs
+        recorte, recortada, detecciones, avisos = detectar_con_recorte(img, req.crop)
 
         confianza = (sum(d.confianza for d in detecciones) / len(detecciones)
                      if detecciones else 0.0)
@@ -385,6 +405,97 @@ async def analyze(req: AnalyzeRequest):
         tiempo_ms=int((time.time() - t0) * 1000),
         encuadre=encuadre,
         unet=unet,
+    )
+
+
+# ─── Silueta de una figura nueva ────────────────────────────────────────────────
+class SilhouetteRequest(BaseModel):
+    image_b64: str
+    crop:      list[float] | None = None
+
+
+class SilhouetteResponse(BaseModel):
+    # Polígono de referencia listo para guardarse en `figures.silhouette`: el
+    # mismo formato (0..1, relación de aspecto conservada) que las figuras que
+    # se sembraron desde `figures_seed.json`. Vacío si no se pudo formar.
+    silhouette:    list[list[float]] = []
+    pieces_used:   int
+    coverage:      float
+    detection_ok:  bool
+    pieces:        dict
+    warnings:      list[str] = []
+    processing_ms: int
+
+
+def _a_referencia(poly: np.ndarray) -> list[list[float]]:
+    """Lleva un contorno en píxeles al lienzo 0..1 de `figures.silhouette`.
+
+    Misma convención que las siluetas sembradas desde `figures_seed.json`: la
+    esquina del recuadro en (0, 0), el lado largo mide 1 y el corto lo que le
+    toque, sin margen ni centrado. Los componentes que las dibujan (web y app)
+    ya centran a partir de ahí, así que una figura añadida desde el panel se ve
+    en el catálogo igual que las de la semilla. No se alinea contra nada: aquí
+    no hay figura objetivo, esta **es** la figura objetivo.
+    """
+    minimo = poly.min(axis=0)
+    escala = float((poly.max(axis=0) - minimo).max()) or 1.0
+    q = (poly - minimo) / escala
+    return [[round(float(x), 4), round(float(y), 4)] for x, y in q]
+
+
+@app.post("/silhouette", response_model=SilhouetteResponse)
+async def silhouette(req: SilhouetteRequest):
+    """Extrae de una foto la silueta de referencia de una figura nueva.
+
+    Es la mitad de `/analyze` que no depende de ninguna figura objetivo: se
+    detectan las fichas, se unen sus máscaras y se devuelve el contorno. Lo usa
+    el panel del docente para añadir figuras al catálogo sin editar JSON a mano.
+
+    Aquí no hay modo demostración: sin detector no hay contorno que fingir, y
+    devolver uno inventado sería sembrar en el catálogo una figura que nadie
+    armó. Se responde 503 y se dice por qué.
+    """
+    t0 = time.time()
+    if yolo_model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="El detector no está cargado: no se puede extraer la silueta. "
+                   "Revisa YOLO_WEIGHTS en vision-service/.env.",
+        )
+    img = decode_image(req.image_b64)
+    if img is None:
+        raise HTTPException(status_code=422, detail="Imagen inválida")
+
+    _, _, detecciones, avisos = detectar_con_recorte(img, req.crop)
+
+    if not detecciones:
+        vacio = tv.ResultadoInventario(
+            completo=False, conteo={p: 0 for p in tv.INVENTARIO_CANONICO},
+            faltantes=dict(tv.INVENTARIO_CANONICO), sobrantes={}, total_detectadas=0,
+        )
+        return SilhouetteResponse(
+            silhouette=[], pieces_used=0, coverage=0.0, detection_ok=False,
+            pieces=pipeline._inventario_para_app(vacio),
+            warnings=avisos + ["No se detectó ninguna ficha en la foto."],
+            processing_ms=int((time.time() - t0) * 1000),
+        )
+
+    inventario = tv.validar_inventario(detecciones)
+    cobertura = tv.cobertura_detectada(detecciones)
+    contorno: list[list[float]] = []
+    try:
+        contorno = _a_referencia(tv.simplificar(tv.silueta_union(detecciones)))
+    except (ValueError, cv2.error) as exc:
+        avisos.append(f"No se pudo formar la silueta: {exc}")
+
+    return SilhouetteResponse(
+        silhouette=contorno,
+        pieces_used=inventario.total_detectadas,
+        coverage=round(float(cobertura), 3),
+        detection_ok=cobertura >= tv.UMBRAL_COBERTURA and bool(contorno),
+        pieces=pipeline._inventario_para_app(inventario),
+        warnings=avisos,
+        processing_ms=int((time.time() - t0) * 1000),
     )
 
 

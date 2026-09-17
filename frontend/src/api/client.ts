@@ -1,6 +1,6 @@
 import type {
   PredictRequest, PredictResponse, SessionRecord, StudentStats, SessionRow,
-  Figure, Student, StudentCreated, User,
+  Figure, NewFigure, SilhouetteResult, Student, StudentCreated, User,
 } from "../types";
 import {
   actualizarAcceso, cabeceraAuth, cerrarSesion, iniciarSesion,
@@ -199,8 +199,43 @@ export async function logout(): Promise<void> {
 }
 
 // ─── Catálogo de figuras (viene de MySQL) ──────────────────────────────────────
-export async function getFigures(): Promise<Figure[]> {
-  return apiFetch<Figure[]>("/figures");
+/**
+ * `todas` incluye las figuras ocultas. Solo lo pide el panel del docente, que
+ * es donde se ocultan y se vuelven a mostrar; el catálogo del estudiante pide
+ * únicamente las activas.
+ */
+export async function getFigures(todas = false): Promise<Figure[]> {
+  return apiFetch<Figure[]>(todas ? "/figures?all=true" : "/figures");
+}
+
+// ─── Alta de figuras (panel del docente) ───────────────────────────────────────
+/**
+ * Saca la silueta de una figura armada a partir de su foto, sin guardar nada.
+ *
+ * Corre el detector, así que espera lo mismo que `/predict`. La foto viaja como
+ * data URL o base64 pelado; el servidor acepta las dos formas.
+ */
+export async function extractSilhouette(imageB64: string): Promise<SilhouetteResult> {
+  return apiFetch<SilhouetteResult>("/figures/silhouette", {
+    method: "POST",
+    body:   JSON.stringify({ image_b64: imageB64 }),
+  }, false, ESPERA_PREDICT_MS);
+}
+
+/** Da de alta la figura. El servidor elige el slug; el nombre puede repetirse. */
+export async function createFigure(datos: NewFigure): Promise<{ figure: Figure }> {
+  return apiFetch<{ figure: Figure }>("/figures", {
+    method: "POST",
+    body:   JSON.stringify(datos),
+  });
+}
+
+/** Oculta o vuelve a mostrar una figura. No se borra: los intentos apuntan al slug. */
+export async function setFigureEnabled(slug: string, enabled: boolean): Promise<void> {
+  await apiFetch(`/figures/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    body:   JSON.stringify({ enabled }),
+  });
 }
 
 // ─── Predicción ────────────────────────────────────────────────────────────────

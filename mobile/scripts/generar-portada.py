@@ -7,14 +7,18 @@ razón práctica: los colores de las fichas están definidos en `src/theme/index
 desincronizada sin que nada lo avise. Aquí los colores van en una sola tabla que
 se compara con la del tema, y volver a generarlas es un comando.
 
-Qué dibuja: las **siete fichas sueltas**, como recién sacadas de la caja. No una
-figura ya armada. Es lo primero que ve el niño al abrir la app, y una figura
-resuelta en la portada le enseña la solución antes de que empiece; las fichas
-sueltas dicen «esto lo armas tú».
+Hoy la portada del arranque y el icono de la app salen de `assets/portada.jpg`,
+una ilustración hecha aparte (las fichas volando sobre la tableta que las
+escanea): este script solo la lleva a los tamaños que piden `expo-splash-screen`
+y los iconos de Android e iOS. Para cambiar la imagen basta reemplazar ese
+archivo y volver a ejecutar el script.
 
-Estilo: el mismo del resto de la app —relleno plano, contorno negro grueso, sin
-degradados ni sombras—, sobre el crema `#FCF6E8` que ya usa `app.json` como
-fondo del arranque.
+Lo único que sigue dibujándose aquí siempre es el **icono monocromo** (Android
+13+, iconos temáticos): el sistema solo lee su canal alfa y una foto no tiene
+silueta que dar, así que se usan las siete fichas sueltas. Y si `portada.jpg`
+faltara, todo lo demás se dibuja también, con esas mismas fichas —relleno
+plano, contorno negro grueso, sin degradados— sobre el crema `#FCF6E8` que ya
+usa `app.json` como fondo del arranque.
 
 Uso:
     python scripts/generar-portada.py            # genera todo
@@ -301,32 +305,63 @@ def main() -> int:
 
     print("\nGenerando:")
 
-    # 1. Portada del arranque. Fondo transparente: `app.json` ya pinta el crema
-    #    detrás (`splash.backgroundColor`), y así no hay dos cremas que puedan
-    #    discrepar si alguien cambia uno de los dos.
-    portada = dibujar(
-        MARCA, 1024, None, margen=11, grosor=2.4,
-        escala_ficha=ESCALA_PORTADA, alto_util=0.82,
-    )
-    portada = con_rotulo(portada)
-    portada.save(ASSETS / "splash-icon.png")
-    print("  assets/splash-icon.png            1024x1024  portada del arranque")
+    # 1. Portada del arranque. Es la única imagen que NO se dibuja aquí: sale de
+    #    `assets/portada.jpg`, una ilustración hecha aparte (las fichas volando
+    #    sobre la tableta que las escanea). Este paso solo la lleva a 1024x1024
+    #    y a PNG, que es lo que espera `expo-splash-screen`. Para cambiar la
+    #    portada se reemplaza ese archivo y se vuelve a ejecutar esto.
+    #
+    #    Si el archivo no está, se cae al dibujo de las siete fichas sueltas que
+    #    había antes, para que el script nunca deje la app sin portada.
+    fuente_portada = ASSETS / "portada.jpg"
+    if fuente_portada.exists():
+        portada = Image.open(fuente_portada).convert("RGB")
+        if portada.size != (1024, 1024):
+            portada = portada.resize((1024, 1024), Image.LANCZOS)
+        portada.save(ASSETS / "splash-icon.png", optimize=True)
+        print("  assets/splash-icon.png            1024x1024  portada del arranque (de assets/portada.jpg)")
+    else:
+        print("  [!] No existe assets/portada.jpg: se dibuja la portada de fichas sueltas.")
+        portada = dibujar(
+            MARCA, 1024, None, margen=11, grosor=2.4,
+            escala_ficha=ESCALA_PORTADA, alto_util=0.82,
+        )
+        portada = con_rotulo(portada)
+        portada.save(ASSETS / "splash-icon.png")
+        print("  assets/splash-icon.png            1024x1024  portada del arranque (dibujada)")
 
-    # 2. Icono del cajón de aplicaciones. Va con fondo opaco y sin transparencia:
-    #    iOS no la admite y la recorta en negro.
-    icono = dibujar(ICONO, 1024, PAPEL, margen=5, grosor=2.8, escala_ficha=ESCALA_ICONO)
-    icono.convert("RGB").save(ASSETS / "icon.png")
-    print("  assets/icon.png                   1024x1024  icono de la app")
+    if fuente_portada.exists():
+        # 2 y 3, con la ilustración. El icono del cajón es la imagen entera
+        #    (iOS le pone él las esquinas redondeadas). El adaptativo de Android
+        #    va a sangre en las dos capas: el sistema lo recorta en círculo,
+        #    cuadrado o pastilla según el lanzador y solo garantiza el 66 %
+        #    central, así que lo que queda siempre a la vista es el pájaro y la
+        #    tableta, que están en el centro; lo que se pierde son las esquinas
+        #    de la habitación. Con la misma imagen en las dos capas, el efecto
+        #    de paralaje de algunos lanzadores no descubre ningún borde.
+        portada.save(ASSETS / "icon.png", optimize=True)
+        print("  assets/icon.png                   1024x1024  icono de la app (de assets/portada.jpg)")
+        capa = portada.resize((512, 512), Image.LANCZOS).convert("RGBA")
+        capa.save(ASSETS / "android-icon-foreground.png", optimize=True)
+        print("  assets/android-icon-foreground.png 512x512   Android, capa de arriba (de assets/portada.jpg)")
+        capa.save(ASSETS / "android-icon-background.png", optimize=True)
+        print("  assets/android-icon-background.png 512x512   Android, capa de abajo (de assets/portada.jpg)")
+    else:
+        # 2. Icono del cajón de aplicaciones. Va con fondo opaco y sin
+        #    transparencia: iOS no la admite y la recorta en negro.
+        icono = dibujar(ICONO, 1024, PAPEL, margen=5, grosor=2.8, escala_ficha=ESCALA_ICONO)
+        icono.convert("RGB").save(ASSETS / "icon.png")
+        print("  assets/icon.png                   1024x1024  icono de la app")
 
-    # 3. Icono adaptativo de Android. El sistema lo recorta en círculo, cuadrado
-    #    o pastilla según el lanzador, y solo garantiza el 66 % central: de ahí
-    #    el margen del 26 %, bastante mayor que el del icono normal.
-    dibujar(ICONO, 512, None, margen=20, grosor=2.8, escala_ficha=ESCALA_ICONO) \
-        .save(ASSETS / "android-icon-foreground.png")
-    print("  assets/android-icon-foreground.png 512x512   Android, capa de arriba")
+        # 3. Icono adaptativo de Android. El sistema lo recorta en círculo,
+        #    cuadrado o pastilla según el lanzador, y solo garantiza el 66 %
+        #    central: de ahí el margen del 26 %, mayor que el del icono normal.
+        dibujar(ICONO, 512, None, margen=20, grosor=2.8, escala_ficha=ESCALA_ICONO) \
+            .save(ASSETS / "android-icon-foreground.png")
+        print("  assets/android-icon-foreground.png 512x512   Android, capa de arriba")
 
-    Image.new("RGBA", (512, 512), PAPEL).save(ASSETS / "android-icon-background.png")
-    print("  assets/android-icon-background.png 512x512   Android, capa de abajo")
+        Image.new("RGBA", (512, 512), PAPEL).save(ASSETS / "android-icon-background.png")
+        print("  assets/android-icon-background.png 512x512   Android, capa de abajo")
 
     # 4. Icono monocromo (Android 13+, iconos temáticos). El sistema lo tiñe con
     #    el color del fondo de pantalla y **solo lee el canal alfa**: los colores
