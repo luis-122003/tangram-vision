@@ -27,6 +27,11 @@ export interface UsuarioFila {
    * lo que permite revocar sin mantener una lista de tokens vivos.
    */
   token_version: number;
+  /**
+   * 0 mientras una cuenta creada desde la app no haya confirmado el código que
+   * se le envió al correo. Las demás cuentas valen 1 desde que existen.
+   */
+  email_verified: number;
   created_at: Date;
 }
 
@@ -40,6 +45,8 @@ export interface Usuario {
   token_version: number;
   /** La clave sigue siendo la temporal: hay que cambiarla antes de usar la app. */
   must_change_password: boolean;
+  /** El correo está confirmado. Sin esto la cuenta no puede iniciar sesión. */
+  email_verified: boolean;
 }
 
 /**

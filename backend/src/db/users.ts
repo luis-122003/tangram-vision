@@ -55,6 +55,10 @@ function descifrarUsuario(fila: UsuarioFila): Usuario {
     // truthy suelto sobre `null` —si alguien la dejara nullable a mano— habría
     // dejado a toda la clase sin poder jugar.
     must_change_password: fila.must_change_password === 1,
+    // Al revés que la anterior, aquí el valor seguro ante una fila rara es
+    // «no verificada»: deja una cuenta sin entrar, no una cuenta sin dueño
+    // probado con sesión abierta.
+    email_verified: fila.email_verified === 1,
   };
 }
 
@@ -203,15 +207,65 @@ export async function buscarEstudiante(id: number): Promise<EstudianteResumen | 
  */
 export async function crearEstudiante(
   nombre: string, correo: string, clave: string, temporal = true,
+  /**
+   * El alta del docente nace verificada: la respalda él, y el correo puede ser
+   * uno de aula sin buzón. Solo el registro desde la app pasa `false`.
+   */
+  verificado = true,
 ): Promise<number> {
   const hash = await bcrypt.hash(clave, RONDAS_BCRYPT);
   const [res] = await pool.query<any>(
     `INSERT INTO users
-       (email_hash, email_enc, name_enc, password_hash, role, must_change_password)
-     VALUES (?, ?, ?, ?, 'student', ?)`,
-    [indiceCiego(correo), cifrar(correo), cifrar(nombre), hash, temporal ? 1 : 0],
+       (email_hash, email_enc, name_enc, password_hash, role, must_change_password,
+        email_verified)
+     VALUES (?, ?, ?, ?, 'student', ?, ?)`,
+    [
+      indiceCiego(correo), cifrar(correo), cifrar(nombre), hash,
+      temporal ? 1 : 0, verificado ? 1 : 0,
+    ],
   );
   return Number(res.insertId);
+}
+
+/**
+ * Rehace nombre y clave de una cuenta que **todavía no ha verificado** su
+ * correo.
+ *
+ * Es lo que pasa cuando alguien se registra con un correo que ya tiene una
+ * cuenta pendiente. Nadie ha demostrado aún que ese correo sea suyo, así que
+ * la cuenta pendiente no tiene dueño que proteger: si se respondiera 409,
+ * cualquiera podría «apartar» el correo de un compañero registrándolo antes, y
+ * el dueño real no podría crearse la cuenta nunca. El `email_verified = 0` del
+ * `WHERE` es lo que impide que esto toque una cuenta ya confirmada.
+ */
+export async function rehacerPendiente(
+  id: number, nombre: string, clave: string,
+): Promise<boolean> {
+  const hash = await bcrypt.hash(clave, RONDAS_BCRYPT);
+  const [res] = await pool.query<any>(
+    `UPDATE users SET name_enc = ?, password_hash = ?, must_change_password = 0
+     WHERE id = ? AND email_verified = 0`,
+    [cifrar(nombre), hash, id],
+  );
+  return Number(res.affectedRows) > 0;
+}
+
+/** Da el correo por confirmado. */
+export async function marcarVerificado(id: number): Promise<void> {
+  await pool.query("UPDATE users SET email_verified = 1 WHERE id = ?", [id]);
+}
+
+/**
+ * Borra las cuentas del registro que llevan más de una semana sin confirmar el
+ * correo. Ocupan el correo y un nombre en el panel del docente sin que nadie
+ * haya demostrado ser su dueño.
+ */
+export async function purgarPendientes(): Promise<void> {
+  await pool.query(
+    `DELETE FROM users
+     WHERE email_verified = 0 AND role = 'student'
+       AND created_at < (NOW() - INTERVAL 7 DAY)`,
+  );
 }
 
 /** ¿El fallo de MySQL es «ese correo ya está dado de alta»? */

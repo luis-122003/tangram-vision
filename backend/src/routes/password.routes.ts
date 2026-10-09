@@ -1,5 +1,5 @@
 /**
- * password.routes.ts — cambio de la contraseña propia.
+ * password.routes.ts — cambio y recuperación de la contraseña propia.
  *
  * Existe porque sin esto todo lo demás se cae solo: las cuentas se siembran con
  * la clave `1234` y hasta ahora no había ninguna forma de cambiarla desde la
@@ -14,9 +14,19 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { buscarPorId, cambiarClave, revocarSesiones } from "../db/users.js";
+import { buscarPorEmail, buscarPorId, cambiarClave, revocarSesiones } from "../db/users.js";
 import { exigirSesion } from "../auth/middleware.js";
 import { HttpError, noAutorizado } from "../http/errors.js";
+import { limiteCorreo } from "../security/headers.js";
+import { consumirCodigo, descartarCodigos, emitirCodigo } from "../security/codigos.js";
+import { comprobarIntentos, limpiarTrasExito, registrarIntento } from "../security/intentos.js";
+import { esClaveTrivial } from "../security/clave-temporal.js";
+import { enviarCorreo } from "../mail/transporte.js";
+import { correoRecuperacion } from "../mail/plantillas.js";
+import {
+  clavesDeCodigo, esquemaCorreo, exigirCorreoConfigurado, textoEspera,
+} from "./auth.routes.js";
+import { reglaClave } from "./esquemas.js";
 
 export const rutasClave = Router();
 
@@ -109,5 +119,90 @@ rutasClave.post("/password", exigirSesion, async (req, res) => {
     // pantalla de inicio de sesión en vez de dejarlo dando vueltas con un token
     // que acaba de dejar de valer.
     detail: "Contraseña actualizada. Vuelve a iniciar sesión en tus dispositivos.",
+  });
+});
+
+// ─── Recuperación con un código enviado al correo ─────────────────────────────
+
+/**
+ * Pide un código para elegir una clave nueva sin conocer la actual.
+ *
+ * Responde siempre lo mismo, exista o no la cuenta, y no espera al envío del
+ * correo: si tardara más cuando la cuenta existe, el tiempo de respuesta diría
+ * lo que el mensaje calla. Solo se envía a cuentas con el correo confirmado;
+ * las que dio de alta el docente con un correo de aula sin buzón siguen
+ * recuperándose como siempre, pidiéndole al docente que la regenere.
+ */
+rutasClave.post("/password/forgot", limiteCorreo, async (req, res) => {
+  exigirCorreoConfigurado();
+  const { email } = esquemaCorreo.parse(req.body);
+
+  const usuario = await buscarPorEmail(email);
+  if (usuario?.email_verified) {
+    const emision = await emitirCodigo(usuario.id, "reset");
+    if (emision.ok) {
+      enviarCorreo(correoRecuperacion(usuario.email, usuario.name, emision.codigo))
+        .catch(async (error: Error) => {
+          console.error("[correo] no se pudo enviar la recuperación:", error.message);
+          await descartarCodigos(usuario.id, "reset").catch(() => {});
+        });
+    }
+  }
+
+  res.json({
+    ok: true,
+    detail: "Si hay una cuenta con ese correo, te enviamos un código para cambiar la clave.",
+  });
+});
+
+const esquemaRestablecer = z.object({
+  email: z.string().trim().toLowerCase().min(1, "Falta el correo").max(254),
+  code: z.string().trim().regex(/^\d{6}$/, "El código son 6 números"),
+  new_password: reglaClave,
+});
+
+/**
+ * Cambia la clave con el código recibido por correo.
+ *
+ * La clave nueva se valida **antes** de mirar el código: si se gastara el
+ * código y luego se rechazara la clave por trivial, el niño tendría que pedir
+ * otro correo por haber elegido «1234».
+ *
+ * Igual que `POST /password`, revoca todas las sesiones antes de cambiar la
+ * clave: quien recupera la cuenta suele hacerlo porque otro la está usando. No
+ * devuelve tokens; se entra después con la clave nueva por `/token`, que es el
+ * camino que lleva el freno por intentos.
+ */
+rutasClave.post("/password/reset", limiteCorreo, async (req, res) => {
+  const { email, code, new_password } = esquemaRestablecer.parse(req.body);
+
+  if (esClaveTrivial(new_password)) {
+    throw new HttpError(422, "Esa clave es muy fácil de adivinar. Elige otra.");
+  }
+
+  const [ip, cuenta] = clavesDeCodigo(req, email);
+  const veredicto = await comprobarIntentos(ip, cuenta);
+  if (!veredicto.permitido) {
+    throw new HttpError(
+      429,
+      `Demasiados códigos equivocados. Espera ${textoEspera(veredicto.esperaSegundos)}.`,
+    );
+  }
+
+  const usuario = await buscarPorEmail(email);
+  const valido =
+    !!usuario?.email_verified && (await consumirCodigo(usuario.id, "reset", code));
+  if (!usuario || !valido) {
+    await registrarIntento(ip, cuenta, false);
+    throw new HttpError(422, "El código no es correcto o ya caducó. Revísalo o pide otro.");
+  }
+
+  await limpiarTrasExito(ip, cuenta);
+  await revocarSesiones(usuario.id);
+  await cambiarClave(usuario.id, new_password);
+
+  res.json({
+    ok: true,
+    detail: "Listo, ya tienes tu clave nueva. Entra con ella.",
   });
 });

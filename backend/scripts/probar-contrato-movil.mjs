@@ -298,14 +298,21 @@ const conNuevo = await pedir("/figures", { headers: auth(renovado.cuerpo?.access
 comprobar("y el token nuevo funciona", conNuevo.code === 200, `HTTP ${conNuevo.code}`);
 
 // ─── 8. Registro desde la app ───────────────────────────────────────────────
-// La pantalla de ingreso crea la cuenta con `POST /register` y espera exactamente
-// la misma respuesta que `/token`: si el registro dejara de traer los tokens, el
-// niño vería «cuenta creada» y a continuación un catálogo que no carga.
+// La pantalla de ingreso crea la cuenta con `POST /register`, que ya no abre
+// sesión: responde `verification_required` y manda un código al correo. La
+// sesión llega con `POST /register/verify`, que tiene que traer exactamente la
+// misma respuesta que `/token`: si le faltaran los tokens, el niño vería
+// «cuenta activada» y a continuación un catálogo que no carga.
+//
+// El código se lee del buzón de Mailpit (MAILPIT_URL, por defecto en esta
+// máquina). Sin Mailpit a mano —probando contra la IP de otra máquina, por
+// ejemplo— se comprueba solo la primera mitad y se avisa.
 //
 // Crea una cuenta con un correo único y la borra al final con la cuenta del
 // docente de demostración. Si esa cuenta ya no tiene la clave `1234`, la de
 // prueba se queda y se avisa para darla de baja desde el panel.
 console.log("\n=== 8. Registro desde la app ===");
+const MAILPIT = process.env.MAILPIT_URL ?? "http://127.0.0.1:8025";
 const correoPrueba = `contrato-${Date.now()}@tangram.edu`;
 const registro = await pedir("/register", {
   method: "POST", headers: { "Content-Type": "application/json" },
@@ -313,30 +320,73 @@ const registro = await pedir("/register", {
 });
 if (registro.code === 403) {
   console.log("  El registro está cerrado (ALLOW_SELF_REGISTRATION=0): se omite esta sección.");
+} else if (registro.code === 503) {
+  console.log("  El servidor no tiene SMTP configurado: el registro responde 503 y se omite.");
 } else {
   comprobar("crea la cuenta y responde 201", registro.code === 201, `HTTP ${registro.code}`);
-  const tokenNuevo = campo(registro.cuerpo, "access_token", "string");
-  campo(registro.cuerpo, "refresh_token", "string");
-  campo(registro.cuerpo, "expires_in", "number");
-  campo(registro.cuerpo, "name", "string");
-  const idNuevo = campo(registro.cuerpo, "id", "number");
-  comprobar("el rol es 'student'", registro.cuerpo?.role === "student", `"${registro.cuerpo?.role}"`);
-  // La clave la eligió el estudiante: no puede nacer marcada como temporal, o
-  // la app lo mandaría a cambiarla nada más crearla.
-  comprobar("nace con el perfil activo (no pide cambiar la clave)",
-            registro.cuerpo?.must_change_password === false);
+  comprobar("pide verificar el correo", registro.cuerpo?.verification_required === true);
+  comprobar("todavía sin tokens", registro.cuerpo?.access_token === undefined);
+  campo(registro.cuerpo, "detail", "string");
 
-  // Y la sesión que devuelve sirve tal cual: es lo que evita el segundo viaje.
-  const conRegistro = await pedir("/figures", { headers: auth(tokenNuevo) });
-  comprobar("la sesión recién creada ya funciona", conRegistro.code === 200, `HTTP ${conRegistro.code}`);
+  // El código, del buzón. Se espera un poco: el envío no es instantáneo.
+  let codigo;
+  try {
+    for (let i = 0; i < 25 && !codigo; i++) {
+      const r = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${correoPrueba}"`)}`);
+      codigo = /\b(\d{6})\b/.exec((await r.json()).messages?.[0]?.Subject ?? "")?.[1];
+      if (!codigo) await new Promise(res => setTimeout(res, 200));
+    }
+  } catch { /* sin Mailpit */ }
 
-  const repetido = await pedir("/register", {
+  let idNuevo;
+  if (!codigo) {
+    console.log(`  [!] No hay Mailpit en ${MAILPIT}: no se puede leer el código ni probar /register/verify.`);
+  } else {
+    const verificado = await pedir("/register/verify", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: correoPrueba, password: "2580", code: codigo }),
+    });
+    comprobar("el código activa la cuenta (200)", verificado.code === 200, `HTTP ${verificado.code}`);
+    const tokenNuevo = campo(verificado.cuerpo, "access_token", "string");
+    campo(verificado.cuerpo, "refresh_token", "string");
+    campo(verificado.cuerpo, "expires_in", "number");
+    campo(verificado.cuerpo, "name", "string");
+    idNuevo = campo(verificado.cuerpo, "id", "number");
+    comprobar("el rol es 'student'", verificado.cuerpo?.role === "student", `"${verificado.cuerpo?.role}"`);
+    // La clave la eligió el estudiante: no puede nacer marcada como temporal, o
+    // la app lo mandaría a cambiarla nada más crearla.
+    comprobar("nace con el perfil activo (no pide cambiar la clave)",
+              verificado.cuerpo?.must_change_password === false);
+
+    // Y la sesión que devuelve sirve tal cual: es lo que evita el segundo viaje.
+    const conRegistro = await pedir("/figures", { headers: auth(tokenNuevo) });
+    comprobar("la sesión recién creada ya funciona", conRegistro.code === 200, `HTTP ${conRegistro.code}`);
+
+    const repetido = await pedir("/register", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Otra vez", email: correoPrueba, password: "2580" }),
+    });
+    comprobar("el correo ya verificado responde 409 con {detail}",
+              repetido.code === 409 && typeof repetido.cuerpo?.detail === "string",
+              `HTTP ${repetido.code}`);
+  }
+
+  // Sin verificar, el ingreso responde 403 con un `code` que la app distingue.
+  const pendiente = `pendiente-${Date.now()}@tangram.edu`;
+  await pedir("/register", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "Otra vez", email: correoPrueba, password: "2580" }),
+    body: JSON.stringify({ name: "Pendiente", email: pendiente, password: "2580" }),
   });
-  comprobar("el correo repetido responde 409 con {detail}",
-            repetido.code === 409 && typeof repetido.cuerpo?.detail === "string",
-            `HTTP ${repetido.code}`);
+  const entraPendiente = await fetch(`${API}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ username: pendiente, password: "2580" }).toString(),
+  });
+  const cuerpoPendiente = await entraPendiente.json().catch(() => null);
+  comprobar("sin verificar: 403 con code 'correo_sin_verificar'",
+            entraPendiente.status === 403 && cuerpoPendiente?.code === "correo_sin_verificar" &&
+            typeof cuerpoPendiente?.detail === "string",
+            `HTTP ${entraPendiente.status} ${cuerpoPendiente?.code}`);
 
   const trivial = await pedir("/register", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -361,6 +411,8 @@ if (registro.code === 403) {
       method: "DELETE", headers: auth(doc.access_token),
     });
     comprobar("cuenta de prueba borrada", baja.code === 200, `HTTP ${baja.code}`);
+    const pend = lista.cuerpo?.find?.(e => e.email === pendiente);
+    if (pend) await pedir(`/students/${pend.id}`, { method: "DELETE", headers: auth(doc.access_token) });
   } else {
     console.log(`  [!] No se pudo entrar como docente para borrar ${correoPrueba}: dala de baja desde el panel.`);
   }

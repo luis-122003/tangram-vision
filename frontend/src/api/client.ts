@@ -153,6 +153,14 @@ export async function login(email: string, password: string): Promise<User> {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Credenciales incorrectas" }));
+    // La cuenta se creó desde la app y aún no confirmó el correo. El código se
+    // escribe en la app, que es donde se registró: esta web no tiene ese paso.
+    if (res.status === 403 && err.code === "correo_sin_verificar") {
+      throw new Error(
+        "Todavía no confirmaste tu correo. Abre la app del celular y escribe el " +
+        "código que te enviamos; después podrás entrar también aquí.",
+      );
+    }
     throw new Error(err.detail ?? "Credenciales incorrectas");
   }
   const data: LoginResponse = await res.json();
@@ -185,6 +193,45 @@ export async function login(email: string, password: string): Promise<User> {
   };
   iniciarSesion(data.access_token, data.refresh_token, usuario);
   return usuario;
+}
+
+/** POST sin sesión, para las rutas de recuperación de clave. */
+async function postSinSesion(path: string, cuerpo: unknown, fallo: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+      signal: AbortSignal.timeout(ESPERA_MS),
+    });
+  } catch (e) {
+    throw errorDeRed(e);
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw new Error(typeof err?.detail === "string" ? err.detail : fallo);
+  }
+}
+
+/**
+ * Pide un código al correo para cambiar la clave olvidada.
+ *
+ * El servidor responde lo mismo exista o no la cuenta, así que no se puede
+ * usar para averiguar qué correos están dados de alta.
+ */
+export function olvideClave(email: string): Promise<void> {
+  return postSinSesion("/password/forgot", { email }, "No se pudo enviar el código");
+}
+
+/**
+ * Cambia la clave olvidada con el código del correo. No abre sesión: el
+ * servidor cierra todas las que hubiera y después se entra con la clave nueva.
+ */
+export function restablecerClave(email: string, codigo: string, nueva: string): Promise<void> {
+  return postSinSesion(
+    "/password/reset", { email, code: codigo, new_password: nueva }, "No se pudo cambiar la clave",
+  );
 }
 
 /** Cierra la sesión en todos los dispositivos. */

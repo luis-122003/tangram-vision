@@ -200,20 +200,26 @@ export interface LoginResponse {
 }
 
 /**
- * Una petición que abre sesión —entrar o registrarse— y guarda sus tokens.
+ * La clave es correcta pero la cuenta todavía no confirmó su correo.
  *
- * Las dos rutas responden con la misma forma (`LoginResponse`), así que lo que
- * cambia entre ellas es solo la ruta y el cuerpo; todo lo demás —el tope de
- * espera, la traducción del fallo de red, el guardado de la sesión— es lo
- * mismo y vive aquí una sola vez.
- *
- * Lleva su propio tope de espera, más corto que el de las demás peticiones
- * (ver `LOGIN_TIMEOUT_MS`): sin él, una dirección equivocada dejaba el spinner
- * girando hasta que se rendía el sistema operativo, un par de minutos después.
+ * Es un tipo propio porque la pantalla de ingreso no lo muestra como un error:
+ * lleva al niño a escribir el código que recibió (o a pedir otro).
  */
-async function abrirSesion(
-  path: string, init: RequestInit, email: string, fallo: string,
-): Promise<User> {
+export class CorreoSinVerificar extends Error {}
+
+/**
+ * Una petición sin sesión —entrar, registrarse, verificar el correo, recuperar
+ * la clave— con el tope de espera corto del ingreso.
+ *
+ * Lleva su propio tope, más corto que el de las demás peticiones (ver
+ * `LOGIN_TIMEOUT_MS`): sin él, una dirección equivocada dejaba el spinner
+ * girando hasta que se rendía el sistema operativo, un par de minutos después.
+ *
+ * El servidor es quien dice por qué no pudo, siempre como `{detail}`, y se
+ * muestra tal cual. La única respuesta que se traduce a un tipo propio es la
+ * del correo sin verificar, que la pantalla atiende aparte.
+ */
+async function pedirSinSesion<T>(path: string, init: RequestInit, fallo: string): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
   const inicio = Date.now();
@@ -233,24 +239,51 @@ async function abrirSesion(
     }
     if (!res.ok) {
       const err = await res.json().catch(() => null);
-      throw new Error(detailToMessage(err?.detail, fallo));
+      const mensaje = detailToMessage(err?.detail, fallo);
+      if (res.status === 403 && err?.code === "correo_sin_verificar") {
+        throw new CorreoSinVerificar(mensaje);
+      }
+      throw new Error(mensaje);
     }
-    const data: LoginResponse = await res.json();
-    const usuario: User = {
-      id:    data.id,
-      name:  data.name,
-      email,
-      role:  data.role as User["role"],
-      // `=== true` y no un truthy: un backend viejo no manda el campo, y
-      // `undefined` tiene que leerse como «no hay nada que cambiar» en vez de
-      // dejar a toda la clase atrapada en la pantalla de la clave.
-      must_change_password: data.must_change_password === true,
-    };
-    await iniciarSesion(data.access_token, data.refresh_token, usuario);
-    return usuario;
+    return await res.json() as T;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** POST con cuerpo JSON y sin sesión. */
+function postJson<T>(path: string, cuerpo: unknown, fallo: string): Promise<T> {
+  return pedirSinSesion<T>(
+    path,
+    {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(cuerpo),
+    },
+    fallo,
+  );
+}
+
+/**
+ * Una petición que abre sesión —entrar o confirmar el correo— y guarda sus
+ * tokens. Las dos rutas responden con la misma forma (`LoginResponse`).
+ */
+async function abrirSesion(
+  path: string, init: RequestInit, email: string, fallo: string,
+): Promise<User> {
+  const data = await pedirSinSesion<LoginResponse>(path, init, fallo);
+  const usuario: User = {
+    id:    data.id,
+    name:  data.name,
+    email,
+    role:  data.role as User["role"],
+    // `=== true` y no un truthy: un backend viejo no manda el campo, y
+    // `undefined` tiene que leerse como «no hay nada que cambiar» en vez de
+    // dejar a toda la clase atrapada en la pantalla de la clave.
+    must_change_password: data.must_change_password === true,
+  };
+  await iniciarSesion(data.access_token, data.refresh_token, usuario);
+  return usuario;
 }
 
 /**
@@ -258,6 +291,8 @@ async function abrirSesion(
  *
  * Las credenciales viajan como formulario porque así las espera `/token`: el
  * PIN de cuatro dígitos que teclea el niño va como `password`.
+ *
+ * Si la cuenta no ha confirmado su correo lanza `CorreoSinVerificar`.
  */
 export async function login(email: string, password: string): Promise<User> {
   const body = new URLSearchParams({ username: email, password });
@@ -274,29 +309,60 @@ export async function login(email: string, password: string): Promise<User> {
 }
 
 /**
- * Crea la cuenta del estudiante y entra con ella en el mismo viaje.
- *
- * `POST /register` responde igual que `/token`, con los tokens ya emitidos: el
- * niño no vuelve a teclear la clave que acaba de elegir. La cuenta nace con el
- * perfil activo —la clave la eligió él—, así que de aquí se va al catálogo y
- * no a la pantalla de cambiarla.
+ * Crea la cuenta del estudiante. **No** abre sesión: el servidor manda un
+ * código de seis dígitos al correo, y la sesión llega al escribirlo
+ * (`verificarCorreo`). Así se comprueba que el correo es de quien se registra.
  *
  * El servidor es quien dice por qué no pudo: correo repetido (409), clave
- * demasiado fácil (422) o registro cerrado por el docente (403). Todos llegan
- * como `{detail}` y se muestran tal cual.
+ * demasiado fácil (422), registro cerrado por el docente (403) o correo sin
+ * configurar en el servidor (503). Todos llegan como `{detail}`.
  */
 export async function registrar(
   nombre: string, email: string, password: string,
+): Promise<void> {
+  await postJson("/register", { name: nombre, email, password }, "No se pudo crear la cuenta");
+}
+
+/**
+ * Confirma el correo con el código recibido y entra.
+ *
+ * Va también la clave que el niño acaba de elegir (la pantalla la conserva):
+ * el servidor solo activa la cuenta con el código **y** la clave juntos.
+ */
+export async function verificarCorreo(
+  email: string, password: string, codigo: string,
 ): Promise<User> {
   return abrirSesion(
-    "/register",
+    "/register/verify",
     {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ name: nombre, email, password }),
+      body:    JSON.stringify({ email, password, code: codigo }),
     },
     email,
-    "No se pudo crear la cuenta",
+    "No se pudo comprobar el código",
+  );
+}
+
+/** Pide otro código de verificación. Responde igual exista o no la cuenta. */
+export async function reenviarCodigo(email: string): Promise<void> {
+  await postJson("/register/resend", { email }, "No se pudo reenviar el código");
+}
+
+/** Pide un código para cambiar la clave olvidada. Responde igual exista o no la cuenta. */
+export async function olvideClave(email: string): Promise<void> {
+  await postJson("/password/forgot", { email }, "No se pudo enviar el código");
+}
+
+/**
+ * Cambia la clave olvidada con el código del correo. No abre sesión: después
+ * se entra con la clave nueva, como siempre.
+ */
+export async function restablecerClave(
+  email: string, codigo: string, nueva: string,
+): Promise<void> {
+  await postJson(
+    "/password/reset", { email, code: codigo, new_password: nueva }, "No se pudo cambiar la clave",
   );
 }
 

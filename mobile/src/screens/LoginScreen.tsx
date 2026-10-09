@@ -5,11 +5,14 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Svg, { Polygon, Rect } from "react-native-svg";
-import { buscarServidor, ErrorDeRed, login, logout, registrar } from "../api/client";
+import {
+  buscarServidor, CorreoSinVerificar, ErrorDeRed, login, logout, olvideClave,
+  reenviarCodigo, registrar, restablecerClave, verificarCorreo,
+} from "../api/client";
 import { useApiUrl } from "../api/config";
 import type { User } from "../api/types";
 import Icon from "../components/Icon";
-import { Card, Eyebrow } from "../components/ui";
+import { Card, Eyebrow, PrimaryButton } from "../components/ui";
 import { PIN_LENGTH, PinBoxes, PinPad } from "../components/Pin";
 import {
   C, S, F, B, TAP, SAFE_BOTTOM, display, shout, label as labelType,
@@ -39,11 +42,27 @@ const LAST_STUDENT = "tangram.lastStudent";
  * La misma pantalla sirve para **crear la cuenta**. No es otra pantalla porque
  * pide lo mismo que entrar más dos datos —nombre y correo— y la clave se
  * teclea en el mismo teclado de cuatro dígitos: la cuenta nace ya con la clave
- * que el niño eligió, así que `POST /register` responde con la sesión abierta
- * y de aquí se va derecho al catálogo. El docente la ve aparecer en su panel
- * sin haber hecho nada.
+ * que el niño eligió. Al crearla, el servidor manda un código de seis números
+ * al correo, y la cuenta no se activa hasta escribirlo aquí mismo (modo
+ * `codigo`): es la prueba de que el correo es suyo y no de un compañero. Con
+ * el código bueno se va derecho al catálogo, y el docente la ve aparecer en su
+ * panel sin haber hecho nada.
+ *
+ * Y sirve para **recuperar la clave olvidada**: se pide un código al correo
+ * (`olvide`) y con él se elige un PIN nuevo (`restablecer`). Solo funciona con
+ * cuentas cuyo correo está confirmado; las que dio de alta el docente con un
+ * correo de aula siguen pidiéndole a él que la regenere.
  */
-type Modo = "entrar" | "registro";
+type Modo = "entrar" | "registro" | "codigo" | "olvide" | "restablecer";
+
+/** Segundos que el servidor hace esperar entre dos envíos (EMAIL_CODE_RESEND). */
+const ESPERA_REENVIO = 60;
+
+/** Un código de correo completo: seis números. */
+const esCodigo = (c: string) => /^\d{6}$/.test(c);
+
+/** Tiene pinta de correo. El servidor es quien lo valida de verdad. */
+const correoValido = (c: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.trim());
 
 export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }: {
   /**
@@ -75,6 +94,20 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
    */
   const [nombreNuevo, setNombreNuevo] = useState("");
   const [correoNuevo, setCorreoNuevo] = useState("");
+  /**
+   * La cuenta que espera su código: correo y la clave que se acaba de teclear.
+   * La clave se guarda solo en memoria, mientras dura este paso, porque el
+   * servidor activa la cuenta con el código **y** la clave juntos.
+   */
+  const [pendiente, setPendiente] = useState<{ correo: string; clave: string } | null>(null);
+  /** El código de seis números que llegó al correo. */
+  const [codigo,     setCodigo]     = useState("");
+  /** Correo de la cuenta cuya clave se está recuperando. */
+  const [correoOlvido, setCorreoOlvido] = useState("");
+  /** Un mensaje que no es un error: «te enviamos un código…». */
+  const [aviso,      setAviso]      = useState("");
+  /** Segundos que faltan para poder pedir otro código. */
+  const [espera,     setEspera]     = useState(0);
   /** Se está sondeando la red buscando el servidor (ver `entrar`). */
   const [buscando,   setBuscando]   = useState(false);
   // La dirección se dibuja desde el hook y no leyéndola una vez: la búsqueda
@@ -93,6 +126,13 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
       .catch(() => { /* sin recuerdo previo se pide el correo */ });
   }, []);
 
+  // Cuenta atrás del reenvío: un paso por segundo, solo mientras hace falta.
+  useEffect(() => {
+    if (espera <= 0) return;
+    const t = setTimeout(() => setEspera(e => e - 1), 1000);
+    return () => clearTimeout(t);
+  }, [espera]);
+
   function press(digit: string) {
     setError("");
     setPin(p => (p.length >= PIN_LENGTH ? p : p + digit));
@@ -103,17 +143,31 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     setPin(p => p.slice(0, -1));
   }
 
-  /** Cambia entre entrar y registrarse. La clave a medias no se arrastra. */
+  /** Cambia de paso. La clave y el código a medias no se arrastran. */
   function cambiarModo(nuevo: Modo) {
     setModo(nuevo);
     setPin("");
+    setCodigo("");
     setError("");
+    setAviso("");
+    if (nuevo === "entrar") setPendiente(null);
+  }
+
+  /** Pasa a escribir el código de la cuenta recién creada o sin confirmar. */
+  function pedirCodigo(correo: string, clave: string, mensaje: string, esperar: boolean) {
+    setPendiente({ correo, clave });
+    cambiarModo("codigo");
+    setAviso(mensaje);
+    setEspera(esperar ? ESPERA_REENVIO : 0);
   }
 
   /** Los dos datos del registro están escritos y tienen pinta de serlo. */
-  const datosDeRegistro =
-    nombreNuevo.trim().length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correoNuevo.trim());
-  const canSubmit = pin.length === PIN_LENGTH && (modo === "entrar" || datosDeRegistro);
+  const datosDeRegistro = nombreNuevo.trim().length >= 2 && correoValido(correoNuevo);
+  const canSubmit =
+    modo === "codigo"      ? esCodigo(codigo) :
+    modo === "olvide"      ? correoValido(correoOlvido) :
+    modo === "restablecer" ? esCodigo(codigo) && pin.length === PIN_LENGTH :
+    pin.length === PIN_LENGTH && (modo === "entrar" || datosDeRegistro);
 
   async function submit() {
     if (!canSubmit || submitting) return;
@@ -121,8 +175,12 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     setSubmitting(true);
     try {
       if (modo === "registro") await crearCuenta(pin);
+      else if (modo === "codigo") await confirmarCodigo();
+      else if (modo === "olvide") await pedirRecuperacion();
+      else if (modo === "restablecer") await cambiarClaveOlvidada();
       else await entrar(pin);
     } catch (e) {
+      setAviso("");
       setError(e instanceof Error ? e.message : "No se pudo entrar.");
       setPin("");
     } finally {
@@ -143,7 +201,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
    * Lo comparten entrar y registrarse: una cuenta nueva se crea en el mismo
    * aula, con el mismo teléfono y la misma dirección guardada de ayer.
    */
-  async function conReintentoDeRed(peticion: () => Promise<User>): Promise<User> {
+  async function conReintentoDeRed<T>(peticion: () => Promise<T>): Promise<T> {
     try {
       return await peticion();
     } catch (e) {
@@ -175,7 +233,18 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   async function entrar(clave: string): Promise<void> {
     const clean = email.trim();
     // `login` guarda el token de sesión y devuelve ya el usuario.
-    const usuario = await conReintentoDeRed(() => login(clean, clave));
+    let usuario: User;
+    try {
+      usuario = await conReintentoDeRed(() => login(clean, clave));
+    } catch (e) {
+      // Clave buena, correo sin confirmar: no es un error, es el paso que falta.
+      // Se deja pedir otro código al momento: el último pudo llegar hace días.
+      if (e instanceof CorreoSinVerificar) {
+        pedirCodigo(clean.toLowerCase(), clave, e.message, false);
+        return;
+      }
+      throw e;
+    }
 
     // Esta app es solo para estudiantes, y el servidor opina lo mismo: el
     // docente no juega, así que `POST /sessions` le responde 403. Dejarlo
@@ -192,18 +261,77 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   }
 
   /**
-   * Crea la cuenta y entra con ella.
-   *
-   * `registrar` vuelve con la sesión ya abierta, así que el resto es idéntico a
-   * entrar: recordar al estudiante y avisar a la raíz. No hace falta comprobar
-   * el rol: el servidor solo crea estudiantes por esta puerta.
+   * Crea la cuenta y pasa a pedir el código que el servidor mandó al correo.
+   * La sesión no llega todavía: llega con el código (`confirmarCodigo`).
    */
   async function crearCuenta(clave: string): Promise<void> {
     const nombre = nombreNuevo.trim();
     const correo = correoNuevo.trim().toLowerCase();
-    const usuario = await conReintentoDeRed(() => registrar(nombre, correo, clave));
+    await conReintentoDeRed(() => registrar(nombre, correo, clave));
+    pedirCodigo(
+      correo, clave, `Te enviamos un código de 6 números a ${correo}. Escríbelo aquí.`, true,
+    );
+  }
+
+  /**
+   * Con el código bueno la cuenta queda activa y la sesión abierta, así que el
+   * resto es idéntico a entrar: recordar al estudiante y avisar a la raíz. No
+   * hace falta comprobar el rol: por esta puerta el servidor solo activa
+   * cuentas de estudiante.
+   */
+  async function confirmarCodigo(): Promise<void> {
+    if (!pendiente) return;
+    const { correo, clave } = pendiente;
+    const usuario = await conReintentoDeRed(() => verificarCorreo(correo, clave, codigo.trim()));
     await recordar(usuario, correo);
+    setPendiente(null);
     onLogin(usuario, clave);
+  }
+
+  /** Abre la recuperación con el correo que ya se conoce, si hay uno. */
+  function empezarRecuperacion() {
+    const conocido = email.trim();
+    cambiarModo("olvide");
+    setCorreoOlvido(conocido);
+  }
+
+  async function pedirRecuperacion(): Promise<void> {
+    const correo = correoOlvido.trim().toLowerCase();
+    await conReintentoDeRed(() => olvideClave(correo));
+    cambiarModo("restablecer");
+    setCorreoOlvido(correo);
+    setAviso(
+      `Si ${correo} tiene una cuenta con el correo confirmado, te llegará un código. ` +
+      "Escríbelo y elige tu clave nueva."
+    );
+    setEspera(ESPERA_REENVIO);
+  }
+
+  /** Cambia la clave y vuelve al ingreso para entrar con ella. */
+  async function cambiarClaveOlvidada(): Promise<void> {
+    const correo = correoOlvido.trim().toLowerCase();
+    await conReintentoDeRed(() => restablecerClave(correo, codigo.trim(), pin));
+    setEmail(correo);
+    // Si el teléfono recordaba a otro estudiante, se entra con este correo.
+    if (account?.email !== correo) setEditing(true);
+    cambiarModo("entrar");
+    setAviso("Listo, ya tienes tu clave nueva. Escríbela para entrar.");
+  }
+
+  /** Otro código, para el paso en el que se esté: verificar o recuperar. */
+  async function reenviar(): Promise<void> {
+    if (espera > 0 || submitting) return;
+    setError("");
+    try {
+      if (modo === "codigo" && pendiente) await reenviarCodigo(pendiente.correo);
+      else if (modo === "restablecer") await olvideClave(correoOlvido.trim().toLowerCase());
+      else return;
+      setAviso("Te enviamos otro código. Usa el más nuevo.");
+      setCodigo("");
+      setEspera(ESPERA_REENVIO);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo reenviar el código.");
+    }
   }
 
   const askEmail = editing || account === null;
@@ -249,7 +377,49 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
       </View>
 
       <View style={s.body}>
-        {modo === "registro" ? (
+        {modo === "codigo" || modo === "restablecer" ? (
+          /* El código del correo. Va en un campo de texto con teclado numérico
+             y no en el teclado propio: son seis números y no cuatro, y así el
+             teléfono puede ofrecer pegarlo desde la notificación del correo. */
+          <View>
+            <Eyebrow color={C.ink}>Código del correo</Eyebrow>
+            <View style={[s.mt8, s.emailBox, inset(4)]}>
+              <TextInput
+                style={[s.emailInput, s.codigoInput, tabular]} value={codigo}
+                onChangeText={t => { setError(""); setCodigo(t.replace(/\D/g, "").slice(0, 6)); }}
+                keyboardType="number-pad" maxLength={6} autoComplete="one-time-code"
+                textContentType="oneTimeCode"
+                placeholder="000000" placeholderTextColor={C.ghost}
+                accessibilityLabel="Código de seis números recibido por correo"
+              />
+            </View>
+            <Pressable
+              onPress={reenviar} disabled={espera > 0}
+              style={s.alternar} accessibilityRole="button"
+              accessibilityLabel="Enviar otro código"
+              accessibilityState={{ disabled: espera > 0 }}
+            >
+              <Text style={s.alternarTexto}>¿No te llegó? Mira también en spam.</Text>
+              <Text style={labelType(12, espera > 0 ? C.muted : C.ink)}>
+                {espera > 0 ? `Otro en ${espera} s` : "Enviar otro"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : modo === "olvide" ? (
+          <View>
+            <Eyebrow color={C.ink}>¿Olvidaste tu clave? Escribe tu correo</Eyebrow>
+            <View style={[s.mt8, s.emailBox, inset(4)]}>
+              <TextInput
+                style={s.emailInput} value={correoOlvido}
+                onChangeText={t => { setError(""); setCorreoOlvido(t); }}
+                autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
+                maxLength={254}
+                placeholder="tu-correo@colegio.edu" placeholderTextColor={C.ghost}
+                accessibilityLabel="Correo de la cuenta"
+              />
+            </View>
+          </View>
+        ) : modo === "registro" ? (
           /* La cuenta nueva: nombre y correo. La clave va abajo, en el mismo
              teclado que el ingreso, porque es la misma clave de cuatro
              dígitos que va a teclear mañana para entrar. */
@@ -309,41 +479,81 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
 
         {/* Clave: cuatro huecos y el teclado, los dos de `components/Pin`. Los
             comparte con la pantalla de cambiar la clave, que los pide tres
-            veces seguidas. */}
-        <View>
-          <Eyebrow color={C.ink}>
-            {modo === "registro" ? "Elige tu clave: cuatro números" : "Escribe tu clave"}
-          </Eyebrow>
-          <View style={s.mt8}>
-            <PinBoxes value={pin} />
-          </View>
-          {error !== "" && (
-            <View style={[s.errorBox, subtle(C.danger)]}>
-              <Text style={s.error}>{error}</Text>
+            veces seguidas. Los pasos de solo correo o solo código no la piden. */}
+        {modo !== "codigo" && modo !== "olvide" && (
+          <View>
+            <Eyebrow color={C.ink}>
+              {modo === "registro" ? "Elige tu clave: cuatro números"
+                : modo === "restablecer" ? "Elige tu clave nueva: cuatro números"
+                : "Escribe tu clave"}
+            </Eyebrow>
+            <View style={s.mt8}>
+              <PinBoxes value={pin} />
             </View>
-          )}
-        </View>
+          </View>
+        )}
 
-        <PinPad
-          onDigit={press} onBackspace={backspace} onSubmit={submit}
-          canSubmit={canSubmit} busy={submitting}
-          submitLabel={modo === "registro" ? "Crear cuenta" : "Entrar"}
-        />
+        {aviso !== "" && error === "" && (
+          <View style={[s.errorBox, subtle(C.note)]}>
+            <Text style={s.error}>{aviso}</Text>
+          </View>
+        )}
+        {error !== "" && (
+          <View style={[s.errorBox, subtle(C.danger)]}>
+            <Text style={s.error}>{error}</Text>
+          </View>
+        )}
 
-        {/* La otra puerta. Un solo enlace que dice a dónde lleva: desde el
-            ingreso, a crear la cuenta; desde el registro, de vuelta a entrar. */}
-        <Pressable
-          onPress={() => cambiarModo(modo === "registro" ? "entrar" : "registro")}
-          style={s.alternar} accessibilityRole="button"
-          accessibilityLabel={modo === "registro" ? "Ya tengo cuenta, entrar" : "Crear una cuenta nueva"}
-        >
-          <Text style={s.alternarTexto}>
-            {modo === "registro" ? "¿Ya tienes cuenta?" : "¿Es tu primera vez?"}
-          </Text>
-          <Text style={labelType(12, C.ink)}>
-            {modo === "registro" ? "Entrar" : "Crear cuenta"}
-          </Text>
-        </Pressable>
+        {modo === "codigo" || modo === "olvide" ? (
+          <PrimaryButton
+            label={modo === "codigo" ? "Activar mi cuenta" : "Enviarme un código"}
+            onPress={submit} disabled={!canSubmit} loading={submitting}
+          />
+        ) : (
+          <PinPad
+            onDigit={press} onBackspace={backspace} onSubmit={submit}
+            canSubmit={canSubmit} busy={submitting}
+            submitLabel={
+              modo === "registro" ? "Crear cuenta"
+                : modo === "restablecer" ? "Cambiar clave"
+                : "Entrar"
+            }
+          />
+        )}
+
+        {/* Las otras puertas. Desde el ingreso: crear la cuenta o recuperar la
+            clave. Desde cualquier otro paso: volver a entrar. */}
+        {modo === "entrar" ? (
+          <>
+            <Pressable
+              onPress={() => cambiarModo("registro")}
+              style={s.alternar} accessibilityRole="button"
+              accessibilityLabel="Crear una cuenta nueva"
+            >
+              <Text style={s.alternarTexto}>¿Es tu primera vez?</Text>
+              <Text style={labelType(12, C.ink)}>Crear cuenta</Text>
+            </Pressable>
+            <Pressable
+              onPress={empezarRecuperacion}
+              style={s.alternar} accessibilityRole="button"
+              accessibilityLabel="Recuperar la clave olvidada"
+            >
+              <Text style={s.alternarTexto}>¿Olvidaste tu clave?</Text>
+              <Text style={labelType(12, C.ink)}>Recuperarla</Text>
+            </Pressable>
+          </>
+        ) : (
+          <Pressable
+            onPress={() => cambiarModo("entrar")}
+            style={s.alternar} accessibilityRole="button"
+            accessibilityLabel="Volver a entrar con mi clave"
+          >
+            <Text style={s.alternarTexto}>
+              {modo === "registro" ? "¿Ya tienes cuenta?" : "¿Te acordaste?"}
+            </Text>
+            <Text style={labelType(12, C.ink)}>Entrar</Text>
+          </Pressable>
+        )}
 
         {/* Ajustes del servidor: discretos pero alcanzables */}
         <Pressable
@@ -394,6 +604,8 @@ const s = StyleSheet.create({
 
   emailBox:  { height: 58, justifyContent: "center", paddingHorizontal: 16 },
   emailInput:{ fontFamily: F.medium, fontSize: 16, color: C.ink, padding: 0 },
+  // Seis cifras espaciadas: se leen y se comparan con el correo de un vistazo.
+  codigoInput:{ fontSize: 26, letterSpacing: 8, textAlign: "center" },
 
   who:       { flexDirection: "row", alignItems: "center",
                paddingLeft: 12, paddingRight: 4, paddingVertical: 10 },

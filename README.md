@@ -331,7 +331,7 @@ y generar el APK: `mobile/README.md`.
 ## Setup rápido
 
 ### 0. Requisitos
-- Node.js 18+, Python 3.10+
+- Node.js 20+, Python 3.10+
 - MySQL Server corriendo localmente (la app crea la BD y las tablas solas)
 - Navegador con acceso a cámara (requiere `localhost` o HTTPS)
 
@@ -404,8 +404,10 @@ es lo que le llega al estudiante.
 ```bash
 npm run probar-seguridad   # 40 comprobaciones: permisos, cifrado, fuerza bruta,
                            # subidas, cabeceras, revocación de sesión
-node scripts/probar-contrato-movil.mjs   # 83 comprobaciones de la forma exacta
+node scripts/probar-contrato-movil.mjs   # comprobaciones de la forma exacta
                            # que la app móvil espera en cada respuesta
+npm run probar-correo      # verificación de correo y recuperación de clave,
+                           # con los códigos reales leídos de Mailpit (ver 2c)
 npm run auditar            # vulnerabilidades de las dependencias de producción
 ```
 
@@ -457,6 +459,36 @@ Los dos campos dicen cosas distintas: `storage_enabled: false` significa que no
 hay credenciales y las fotos **no se guardan a propósito**; `enabled: true` con
 `connected: false` es una avería que hay que mirar.
 
+### 2c. Correo (verificación y recuperación de clave)
+
+El registro desde la app y la recuperación de la clave envían un **código de 6
+números** al correo. Sin SMTP configurado esas dos funciones responden 503 y
+todo lo demás sigue igual. Las cuentas que da de alta el docente no necesitan
+correo: nacen verificadas.
+
+En `backend/.env`:
+
+```
+SMTP_HOST=smtp.gmail.com     # o el de tu proveedor
+SMTP_PORT=587
+SMTP_SECURE=0                # 587 con STARTTLS obligatorio; 1 para TLS directo (465)
+SMTP_USER=tucuenta@gmail.com
+SMTP_PASS=                   # en Gmail, una «contraseña de aplicación»
+SMTP_FROM="Tangram IA <tucuenta@gmail.com>"
+```
+
+Para desarrollo, [Mailpit](https://github.com/axllent/mailpit) es un servidor
+SMTP local que guarda los correos sin enviarlos y los muestra en el navegador:
+
+```bash
+mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025
+# backend/.env: SMTP_HOST=127.0.0.1  SMTP_PORT=1025  SMTP_FROM=...
+# los correos se ven en http://localhost:8025
+```
+
+Al arrancar, el backend comprueba la conexión y lo dice en la consola
+(`[OK] SMTP en …` o el motivo del fallo).
+
 ### 3. Frontend
 ```bash
 cd frontend
@@ -483,6 +515,14 @@ El nombre y el correo de los estudiantes —son menores— se guardan **cifrados
 con AES-256-GCM, con un índice ciego para poder buscarlos en el login. Las
 contraseñas van con bcrypt, y el inicio de sesión está limitado por IP y por
 cuenta con bloqueo creciente, sin captcha: quien entra es un niño de primaria.
+
+**Correo.** La cuenta que se crea desde la app no recibe sesión hasta que
+escribe el código de 6 números que le llega al correo. Así nadie puede
+registrarse con el correo de un compañero. La clave olvidada se recupera igual,
+con un código. Los códigos caducan a los 15 minutos, se destruyen al quinto
+fallo y en la base solo se guarda su HMAC. Las rutas que envían correo están
+limitadas por IP (`RATE_LIMIT_EMAIL_IP`) y los fallos de código tienen su propio
+bloqueo por cuenta, separado del ingreso.
 
 El análisis completo —cada decisión razonada, incluidas las que se tomaron en
 contra del manual por el contexto del aula, y lo que queda pendiente— se lleva
@@ -598,7 +638,11 @@ explica que no cuenta en contra.
 | Método | Ruta                       | Acceso            | Descripción                                    |
 |--------|----------------------------|-------------------|------------------------------------------------|
 | POST   | `/token`                   | público           | Login (bcrypt) → token de acceso y de refresco |
-| POST   | `/register`                | público           | El estudiante se crea la cuenta desde la app y entra; misma respuesta que `/token` |
+| POST   | `/register`                | público           | El estudiante se crea la cuenta desde la app; se le envía un código al correo |
+| POST   | `/register/verify`         | público           | Correo + clave + código → activa la cuenta; misma respuesta que `/token` |
+| POST   | `/register/resend`         | público           | Reenvía el código (respuesta idéntica exista o no la cuenta) |
+| POST   | `/password/forgot`         | público           | Envía un código para recuperar la clave (respuesta idéntica exista o no) |
+| POST   | `/password/reset`          | público           | Correo + código + clave nueva; cierra todas las sesiones |
 | POST   | `/token/refresh`           | público           | Renueva el token de acceso                     |
 | POST   | `/logout`                  | autenticado       | Cierra la sesión en todos los dispositivos     |
 | GET    | `/health`                  | público           | MySQL, detector, almacén de fotos, umbral y cómo se compara |
@@ -628,7 +672,11 @@ ingreso de la app (`POST /register`) con su nombre, su correo y una clave de
 cuatro dígitos que elige él. Las dos escriben la misma fila de `users` con las
 mismas reglas (`routes/esquemas.ts`), y las dos aparecen en el panel del docente
 por igual: la diferencia es que la cuenta registrada desde la app nace ya con el
-perfil activo, porque la clave la eligió su dueño. El registro está limitado por
+perfil activo, porque la clave la eligió su dueño, pero **no se puede usar hasta
+confirmar el correo** con el código que se le envía (`POST /register/verify`).
+Si la cuenta sin confirmar recibe un login con la clave correcta, `/token`
+responde 403 con `code: "correo_sin_verificar"`. Las cuentas que nunca se
+confirman se borran a los 7 días. El registro está limitado por
 IP (`RATE_LIMIT_REGISTER_IP`), rechaza las claves triviales que el generador
 tampoco reparte (`1111`, `1234`…) y se cierra con `ALLOW_SELF_REGISTRATION=0`.
 

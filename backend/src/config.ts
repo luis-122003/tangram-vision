@@ -93,6 +93,13 @@ function duracion(nombre: string, porDefecto: string): string {
   return bruto;
 }
 
+/** La misma duración de `duracion`, ya pasada a segundos. */
+function segundos(nombre: string, porDefecto: string): number {
+  const valor = duracion(nombre, porDefecto);
+  const unidad = { s: 1, m: 60, h: 3600, d: 86400 }[valor.slice(-1) as "s" | "m" | "h" | "d"];
+  return Number(valor.slice(0, -1)) * unidad;
+}
+
 function bandera(nombre: string, porDefecto = false): boolean {
   const bruto = process.env[nombre];
   if (bruto === undefined) return porDefecto;
@@ -191,6 +198,39 @@ export const config = {
   })(),
 
   /**
+   * Servidor SMTP con el que salen los códigos de verificación y de
+   * recuperación de clave.
+   *
+   * Es opcional como `storage`, pero sin él quedan cerradas las dos puertas
+   * que dependen del correo: el registro desde la app (no hay forma de probar
+   * que el correo es de quien se registra) y la recuperación de clave. El
+   * ingreso normal y todo lo demás siguen funcionando, y las cuentas que da de
+   * alta el docente no necesitan correo.
+   *
+   * Con `SMTP_SECURE=0` (puerto 587) se exige STARTTLS igualmente: la
+   * contraseña del buzón y los códigos no viajan en claro. La única excepción
+   * es un servidor en esta misma máquina —Mailpit, en desarrollo—, donde no
+   * hay red de por medio que escuchar.
+   */
+  smtp: (() => {
+    const host = (process.env.SMTP_HOST ?? "").trim();
+    const remitente = (process.env.SMTP_FROM ?? "").trim();
+    return {
+      host,
+      port: entero("SMTP_PORT", 587),
+      seguro: bandera("SMTP_SECURE", false),
+      usuario: (process.env.SMTP_USER ?? "").trim(),
+      clave: process.env.SMTP_PASS ?? "",
+      remitente,
+      /** Cuánto vale un código desde que se envía. */
+      codigoSegundos: segundos("EMAIL_CODE_TTL", "15m"),
+      /** Espera mínima entre dos envíos a la misma cuenta. */
+      reenvioSegundos: segundos("EMAIL_CODE_RESEND", "60s"),
+      activo: host !== "" && remitente !== "",
+    };
+  })(),
+
+  /**
    * Catálogo semilla. Vive en el servicio de visión porque allí lo usan
    * `--autotest` y `--calibrar` con su ruta por defecto; aquí solo se lee una
    * vez, la primera, para sembrar MySQL.
@@ -255,6 +295,12 @@ export const config = {
      * y frenan a quien quiera llenar la tabla de cuentas a golpe de script.
      */
     registroPorIp: entero("RATE_LIMIT_REGISTER_IP", 10),
+    /**
+     * Peticiones por IP y por hora a las rutas que envían un correo o validan
+     * un código (verificación y recuperación de clave). Frena tanto el uso del
+     * servidor como cañón de correo como el barrido de códigos.
+     */
+    correoPorIp: entero("RATE_LIMIT_EMAIL_IP", 20),
     /** Filas máximas que devuelve un listado sin paginar. */
     filasPorPagina: entero("PAGE_SIZE", 100),
   },

@@ -15,6 +15,13 @@ export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * Motivo legible por máquina, para los casos en que el cliente tiene que
+     * reaccionar distinto ante el mismo código HTTP. Viaja como `code` junto a
+     * `detail`. Hoy solo lo usa `correo_sin_verificar` en `/token`, que es un
+     * 403 que no significa «no puedes» sino «te falta confirmar el correo».
+     */
+    readonly codigo?: string,
   ) {
     super(message);
     this.name = "HttpError";
@@ -47,7 +54,9 @@ export function manejadorDeErrores(
   }
 
   if (err instanceof HttpError) {
-    res.status(err.status).json({ detail: err.message });
+    res.status(err.status).json(
+      err.codigo ? { detail: err.message, code: err.codigo } : { detail: err.message },
+    );
     return;
   }
 

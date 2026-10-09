@@ -151,3 +151,18 @@ export const limiteRegistro: RequestHandler = rateLimit({
   windowMs: 60 * 60_000,
   limit: config.limites.registroPorIp,
 });
+
+/**
+ * Límite de las rutas que envían un correo o comprueban un código —verificar
+ * la cuenta, reenviar el código, recuperar la clave—, por IP y por hora.
+ *
+ * Cuentan también las peticiones que salen bien: cada una puede costar un
+ * correo enviado, y sin tope el servidor serviría para bombardear el buzón de
+ * cualquiera. El barrido de códigos lo frena además el tope de fallos de cada
+ * código (`security/codigos.ts`) y el bloqueo por cuenta de `intentos.ts`.
+ */
+export const limiteCorreo: RequestHandler = rateLimit({
+  ...comunes,
+  windowMs: 60 * 60_000,
+  limit: config.limites.correoPorIp,
+});

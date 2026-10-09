@@ -108,6 +108,9 @@ async function crearTablas(): Promise<void> {
         -- 1 mientras la cuenta conserve la clave temporal que le dio el docente.
         must_change_password TINYINT(1) NOT NULL DEFAULT 0,
         token_version INT NOT NULL DEFAULT 0,
+        -- 0 solo para las cuentas del registro desde la app que aún no han
+        -- confirmado el código enviado al correo. Ver COLUMNAS_REQUERIDAS.
+        email_verified TINYINT(1) NOT NULL DEFAULT 1,
         created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
@@ -155,6 +158,26 @@ async function crearTablas(): Promise<void> {
         ok          TINYINT(1) NOT NULL DEFAULT 0,
         created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_attempts (identifier, kind, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Códigos de un solo uso enviados por correo: verificar la cuenta recién
+  // registrada (`verify`) o recuperar la clave (`reset`). Se guarda un HMAC del
+  // código y nunca el código: quien lea esta tabla no puede usar ninguno. El
+  // índice único deja un solo código vivo por cuenta y propósito, así que pedir
+  // otro invalida el anterior.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_codes (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        user_id     INT NOT NULL,
+        purpose     ENUM('verify','reset') NOT NULL,
+        code_hash   CHAR(64) NOT NULL,
+        attempts    TINYINT NOT NULL DEFAULT 0,
+        expires_at  DATETIME NOT NULL,
+        created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_email_codes_user FOREIGN KEY (user_id)
+            REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE KEY uk_email_codes (user_id, purpose)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 }
@@ -254,6 +277,16 @@ const COLUMNAS_REQUERIDAS: ReadonlyArray<[string, string, string]> = [
    * configurado, donde el sistema sigue funcionando sin guardar imágenes.
    */
   ["sessions", "image_path", "VARCHAR(255) NULL"],
+  /**
+   * ¿Confirmó el dueño de la cuenta que el correo es suyo?
+   *
+   * El valor por defecto es 1 a propósito: al añadir la columna, todas las
+   * cuentas que ya existían —las de demostración y las que dio de alta el
+   * docente— quedan verificadas, porque las respalda el docente y muchas usan
+   * correos de aula sin buzón real. Solo el registro desde la app inserta un 0
+   * explícito, y esa cuenta no recibe sesión hasta que confirma el código.
+   */
+  ["users", "email_verified", "TINYINT(1) NOT NULL DEFAULT 1"],
 ];
 
 async function asegurarColumnas(): Promise<void> {

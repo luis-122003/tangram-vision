@@ -26,6 +26,9 @@ import { config } from "./config.js";
 import { inicializarBaseDeDatos } from "./db/schema.js";
 import { pool } from "./db/pool.js";
 import { purgarIntentosViejos } from "./security/intentos.js";
+import { purgarCodigosCaducados } from "./security/codigos.js";
+import { purgarPendientes } from "./db/users.js";
+import { comprobarCorreo } from "./mail/transporte.js";
 import { cabecerasDeSeguridad, forzarHttps, limiteApi } from "./security/headers.js";
 import { manejadorDeErrores, prohibido } from "./http/errors.js";
 import { rutasAuth } from "./routes/auth.routes.js";
@@ -234,15 +237,25 @@ process.on("uncaughtException", (error) => {
   void apagar("excepción no capturada", 1);
 });
 
+/**
+ * Limpieza periódica: intentos fuera de la ventana, códigos de correo
+ * caducados y cuentas del registro que nunca confirmaron el correo.
+ */
+async function purgar(): Promise<void> {
+  await purgarIntentosViejos();
+  await purgarCodigosCaducados();
+  await purgarPendientes();
+}
+
 async function arrancar(): Promise<void> {
   try {
     await inicializarBaseDeDatos();
-    await purgarIntentosViejos();
+    await purgar();
     // La tabla de intentos solo sirve para la ventana reciente; se limpia sola
     // para que no crezca sin fin. `unref` deja que el proceso termine si es lo
     // único que queda vivo.
     setInterval(() => {
-      purgarIntentosViejos().catch(e => console.error("[intentos] purga:", e));
+      purgar().catch(e => console.error("[purga]", e));
     }, 3600_000).unref();
   } catch (error) {
     // Igual que en la versión anterior, un MySQL caído no impide arrancar: el
@@ -262,6 +275,7 @@ async function arrancar(): Promise<void> {
       console.warn("[!] ALLOWED_ORIGINS='*': acótalo antes de desplegar.");
     }
     comprobarVision();
+    comprobarCorreo();
   });
 
   /**
