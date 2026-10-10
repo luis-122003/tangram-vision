@@ -1,0 +1,47 @@
+# Caddy: HTTPS automático (Let's Encrypt), la web estática y la API bajo /api.
+#
+# DOMINIO llega del entorno (docker-compose.yml). Con DOMINIO=localhost Caddy
+# usa su propia autoridad interna, que es lo que permite probar todo el montaje
+# en la máquina de desarrollo antes de subirlo.
+{
+	email {$ACME_EMAIL}
+}
+
+www.{$DOMINIO} {
+	redir https://{$DOMINIO}{uri} permanent
+}
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# La API. `handle_path` quita el prefijo: el backend sigue viendo /token,
+	# /predict… igual que en desarrollo. Caddy añade X-Forwarded-For/Proto, que
+	# el backend lee con TRUST_PROXY=1 (límite por IP y HTTPS forzado).
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# La web. Una sola página: toda ruta desconocida devuelve index.html.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+
+		# La misma CSP que el build inyecta como <meta>, ahora como cabecera:
+		# así cubre también frame-ancestors, que en <meta> se ignora.
+		header {
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "DENY"
+			Referrer-Policy "no-referrer"
+			Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+			-Server
+		}
+		# index.html nunca en caché (apunta a los assets con hash); los assets, un año.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@html not path /assets/*
+		header @html Cache-Control "no-cache"
+	}
+}

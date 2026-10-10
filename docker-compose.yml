@@ -1,0 +1,93 @@
+# Tangram IA en producción: un solo servidor, cuatro contenedores.
+#
+#   Internet ──443──▶ caddy ──┬── /       → web estática
+#                             └── /api/*  → backend ──▶ vision (interno)
+#                                                   └──▶ mysql  (interno)
+#
+# Solo caddy publica puertos. El servicio de visión no autentica a nadie y
+# MySQL guarda datos de menores: ninguno de los dos debe verse desde fuera.
+#
+# Configuración (ninguno de estos archivos se versiona; ver DESPLIEGUE.md):
+#   .env                 DOMINIO, ACME_EMAIL y las claves de MySQL
+#   deploy/backend.env   secretos de sesión y cifrado, SMTP, Supabase
+#   deploy/vision.env    detector y umbrales
+#   vision-service/models/tangram_formas_v2.pt   los pesos (no van en git)
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: https://${DOMINIO:?Falta DOMINIO en .env}/api
+    environment:
+      DOMINIO: ${DOMINIO}
+      ACME_EMAIL: ${ACME_EMAIL:?Falta ACME_EMAIL en .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data        # certificados: perderlos obliga a pedirlos de nuevo
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: deploy/backend.env
+    # Lo que depende del montaje y no de quien lo instala va aquí, fijo, para que
+    # un backend.env copiado de desarrollo no lo pueda deshacer.
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: "8000"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: tangram_app
+      DB_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en .env}
+      DB_NAME: tangram_ia
+      VISION_URL: http://vision:8001
+      ALLOWED_ORIGINS: https://${DOMINIO}
+      FORCE_HTTPS: "1"
+      TRUST_PROXY: "1"          # exactamente un proxy delante: caddy
+    depends_on:
+      mysql:
+        condition: service_healthy
+      vision:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vision:
+    build:
+      context: .
+      dockerfile: vision-service/Dockerfile
+    env_file: deploy/vision.env
+    volumes:
+      - ./vision-service/models:/app/models:ro
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: tangram_ia
+      TANGRAM_DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./deploy/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:

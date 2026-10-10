@@ -1,0 +1,23 @@
+# Lo que nunca debe entrar en una imagen: secretos, dependencias de la máquina
+# de desarrollo (se instalan dentro, para Linux) y pesos del modelo, que se
+# montan como volumen en vez de hornearse en la imagen.
+**/.env
+**/.env.*
+!**/.env.example
+deploy/*.env
+**/node_modules
+**/dist
+**/venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.log
+vision-service/models
+vision-service/sintetico
+mobile
+notebooks
+.git
+.claude
+.agents
+*.apk
+*.bat

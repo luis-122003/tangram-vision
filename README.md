@@ -328,6 +328,13 @@ La versión para estudiantes también existe como app nativa Android en
 backend. El docente sigue usando la web. Instrucciones completas para probarla
 y generar el APK: `mobile/README.md`.
 
+## Despliegue en un servidor
+
+Para publicarlo en Internet con dominio y HTTPS (Docker Compose en una VM, con
+Caddy delante y el servicio de visión y MySQL sin puertos abiertos), la guía
+paso a paso es `DESPLIEGUE.md`. Lo que sigue es la instalación en una sola
+máquina para desarrollo o para el aula.
+
 ## Setup rápido
 
 ### 0. Requisitos

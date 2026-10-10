@@ -64,3 +64,7 @@ Thumbs.db
 
 # Paquete del dataset sintetico para Colab: se regenera, y lleva un .pt dentro.
 tangram_sintetico.zip
+
+# ─── Despliegue con Docker ──────────────────────────────────────────────────
+# La configuración real del servidor; las plantillas (*.env.example) sí van.
+deploy/*.env

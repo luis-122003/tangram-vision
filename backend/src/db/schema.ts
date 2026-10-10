@@ -324,8 +324,9 @@ async function sembrarUsuarios(): Promise<void> {
   if (config.produccion) {
     console.warn(
       "[!] No se sembraron las cuentas de demostración: NODE_ENV=production.\n" +
-      "    La tabla `users` está vacía y nadie puede entrar todavía. Crea la\n" +
-      "    primera cuenta a mano y cámbiale la contraseña con POST /password.",
+      "    La tabla `users` está vacía y nadie puede entrar todavía. Crea el\n" +
+      "    primer docente con:  node scripts/crear-docente.mjs <correo> \"<nombre>\"\n" +
+      "    (en Docker: docker compose exec backend node scripts/crear-docente.mjs …)",
     );
     return;
   }

@@ -23,7 +23,11 @@ function csp(api: string): Plugin {
     // `style`). Una inyección de CSS es mucho menos grave que una de script,
     // que es la que queda cerrada arriba.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    // `https://*.supabase.co`: la foto de cada intento en el panel del docente
+    // llega como URL firmada del almacén. Sin esta fuente el navegador la
+    // bloquea y la columna «Foto» sale rota (en `npm run dev` no se nota, porque
+    // ahí no hay CSP).
+    "img-src 'self' data: blob: https://*.supabase.co",
     // `blob:` es el flujo de la cámara; `data:` la foto ya capturada.
     "media-src 'self' blob:",
     `connect-src 'self' ${api}`,

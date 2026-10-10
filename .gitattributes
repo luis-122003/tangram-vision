@@ -1,0 +1,8 @@
+# Lo que se ejecuta dentro de Linux (contenedores, la VM) tiene que llegar con
+# finales de línea LF aunque se edite en Windows: un .sh con CRLF falla con
+# «bad interpreter» y MySQL no crea el usuario de la aplicación.
+*.sh        text eol=lf
+Caddyfile   text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.env.example text eol=lf
