@@ -24,10 +24,12 @@ certificado de Let's Encrypt.
 1. **GitHub Student Pack.** En <https://education.github.com/pack>, verifica tu
    cuenta con el correo de la universidad o el carné. La aprobación puede tardar
    unos días.
-2. **Azure for Students.** Desde el Pack, actívalo: son 100 USD de crédito, sin
-   tarjeta.
+2. **DigitalOcean.** Desde el Pack, reclama la oferta: son 200 USD de crédito
+   durante un año. Al registrarte, entra **con GitHub** para que se aplique el
+   crédito. Puede pedir una tarjeta o un pago de prueba con PayPal para validar
+   la cuenta, y solo cobra lo que exceda el crédito.
 3. **Dominio en Namecheap.** También desde el Pack: un dominio `.me` gratis por un
-   año.
+   año. Si aún no lo tienes, mira la alternativa temporal del paso 3.
 4. **Gmail.** En la cuenta que enviará los códigos: *Cuenta de Google →
    Seguridad → Verificación en dos pasos* (actívala) → *Contraseñas de
    aplicaciones* → crea una llamada «Tangram». Guarda las 16 letras.
@@ -40,28 +42,34 @@ certificado de Let's Encrypt.
    - Un proyecto gratuito se **pausa tras una semana sin uso**. Si
      `/api/health` da `storage_connected: false`, entra al panel y reactívalo.
 
-## 2. La máquina virtual en Azure
+## 2. El servidor en DigitalOcean (Droplet)
 
-En el portal de Azure: **Máquinas virtuales → Crear**.
+Primero, una clave SSH en tu PC (PowerShell). Si ya tienes una, sáltalo:
+
+```powershell
+ssh-keygen -t ed25519 -f $HOME\.ssh\tangram_do
+Get-Content $HOME\.ssh\tangram_do.pub      # esto es lo que se pega en DigitalOcean
+```
+
+En el panel: **Create → Droplets**.
 
 | Campo | Valor |
 |---|---|
-| Región | **Mexico Central** |
-| Imagen | Ubuntu Server 24.04 LTS |
-| Tamaño | **B2s** (2 vCPU, 4 GB) o B2as_v2. Con menos de 4 GB, el detector y MySQL no caben juntos |
-| Autenticación | Clave pública SSH: descarga el `.pem` y guárdalo bien |
-| Puertos de entrada | **22, 80 y 443**. Nada más |
-| Disco | 30 GB estándar SSD bastan |
+| Región | **New York** (NYC1 o NYC3) o **Atlanta**: las más cercanas a Colombia |
+| Imagen | **Ubuntu 24.04 (LTS) x64** |
+| Tamaño | **Basic → Regular → 4 GB / 2 CPU** (24 USD/mes). Con 2 GB, el detector y MySQL no caben juntos |
+| Autenticación | **SSH Key → New SSH Key**: pega el contenido de `tangram_do.pub` |
+| Hostname | `tangram-ia` |
 
-Luego, en la VM: **Redes → Dirección IP pública → Configuración →
-Asignación: Estática**. Si no, la IP cambia al apagarla y el dominio deja de
-apuntar.
+Al crearlo aparece su **IP pública**. No cambia mientras el Droplet exista.
 
-**El crédito.** Una B2s cuesta unos 30-40 USD al mes encendida, así que los 100
-USD dan para unos 3 meses. Cuando no la uses, **Detener** desde el portal (no
-desde dentro de la VM): una VM detenida y *desasignada* no cobra cómputo, solo
-unos centavos de disco. En *Cost Management → Presupuestos* pon una alerta en 80
-USD.
+Después, **Networking → Firewalls → Create Firewall**: entrada solo **SSH (22),
+HTTP (80) y HTTPS (443)**. Aplícalo al Droplet `tangram-ia`.
+
+**El crédito.** 24 USD al mes sobre 200 USD alcanzan para unos 8 meses, dentro
+del año que dura la oferta. Ojo: **un Droplet apagado sigue cobrando**. Solo
+deja de cobrar si se destruye, así que no lo apagues pensando en ahorrar. En
+*Billing → Billing Alerts* pon un aviso en 150 USD.
 
 ## 3. El dominio
 
@@ -70,7 +78,7 @@ traiga y crea:
 
 | Tipo | Host | Valor |
 |---|---|---|
-| A | `@` | la IP pública de la VM |
+| A | `@` | la IP del Droplet |
 | A | `www` | la misma IP |
 
 Tarda entre minutos y una hora. Para comprobarlo: `nslookup tu-dominio.me`
@@ -78,23 +86,28 @@ debe devolver la IP. **No sigas al paso 5 hasta que resuelva**: Caddy pide el
 certificado al arrancar, y si el dominio todavía no apunta, Let's Encrypt
 rechaza la petición y después aplica una espera.
 
+**Mientras llega el dominio.** `sslip.io` convierte una IP en un nombre que
+Let's Encrypt acepta, sin registrar nada. Con IP `203.0.113.7`, usa
+`DOMINIO=203-0-113-7.sslip.io` en el `.env`. Cuando tengas el `.me`, cambia
+`DOMINIO` y vuelve a ejecutar `docker compose up -d --build` (hay que
+reconstruir: la web lleva la dirección de la API dentro).
+
 ## 4. Preparar el servidor
 
 Desde tu PC (PowerShell):
 
 ```powershell
-ssh -i ruta\a\clave.pem azureuser@<IP>
+ssh -i $HOME\.ssh\tangram_do root@<IP>
 ```
 
-Ya en la VM:
+Ya en el Droplet:
 
 ```bash
 # Docker
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER && exit      # salir y volver a entrar por ssh
+curl -fsSL https://get.docker.com | sh
 
-# Firewall del sistema, además del de Azure
-sudo ufw allow OpenSSH && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw --force enable
+# Firewall del sistema, además del de DigitalOcean
+ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw --force enable
 
 # El código
 git clone https://github.com/luis-122003/tangram-vision.git tangram-ia
@@ -104,16 +117,16 @@ cd tangram-ia
 Los pesos del detector no están en git. Cópialos **desde tu PC**:
 
 ```powershell
-scp -i ruta\a\clave.pem vision-service\models\tangram_formas_v2.pt azureuser@<IP>:~/tangram-ia/vision-service/models/
+scp -i $HOME\.ssh\tangram_do vision-service\models\tangram_formas_v2.pt root@<IP>:~/tangram-ia/vision-service/models/
 ```
 
 ## 5. Configurar y arrancar
 
-En la VM, dentro de `tangram-ia`:
+En el Droplet, dentro de `tangram-ia`:
 
 ```bash
 bash deploy/generar-secretos.sh     # crea .env, deploy/backend.env y deploy/vision.env
-nano .env                           # DOMINIO=tu-dominio.me y ACME_EMAIL
+nano .env                           # DOMINIO=tu-dominio.me (o la IP con sslip.io) y ACME_EMAIL
 nano deploy/backend.env             # SMTP_USER, SMTP_PASS, SMTP_FROM y SUPABASE_*
 ```
 
