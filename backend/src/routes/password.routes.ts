@@ -64,6 +64,14 @@ const esquemaClave = z.object({
 rutasClave.post("/password", exigirSesion, async (req, res) => {
   const { current_password, new_password } = esquemaClave.parse(req.body);
 
+  // La misma regla que al registrarse y al recuperar la clave. Es también el
+  // último paso del registro desde la app, donde el niño cambia la clave
+  // temporal por la suya: sin esto, ahí podía elegir el `1234` que el registro
+  // le negaba.
+  if (esClaveTrivial(new_password)) {
+    throw new HttpError(422, "Esa clave es muy fácil de adivinar. Elige otra.");
+  }
+
   const identidad = req.usuario;
   if (!identidad) throw noAutorizado();
 
