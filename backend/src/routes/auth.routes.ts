@@ -17,8 +17,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import {
-  buscarPorEmail, buscarPorId, crearEstudiante, esCorreoDuplicado, marcarVerificado,
-  rehacerPendiente, revocarSesiones, verificarUsuario,
+  buscarPorEmail, buscarPorId, crearEstudiante, esCorreoDuplicado, fijarCorreo,
+  marcarVerificado, rehacerPendiente, revocarSesiones, verificarUsuario,
 } from "../db/users.js";
 import { firmarAcceso, firmarRefresco, segundosDeVida, verificarRefresco } from "../auth/jwt.js";
 import { exigirSesion } from "../auth/middleware.js";
@@ -78,7 +78,7 @@ function respuestaDeSesion(usuario: Usuario) {
  * puerta a saturar el servidor a base de intentos costosos.
  */
 const esquemaLogin = z.object({
-  username: z.string().min(1, "Falta el correo").max(254).trim(),
+  username: z.string().min(1, "Falta tu usuario o correo").max(254).trim(),
   password: z.string().min(1, "Falta la contraseña").max(200),
 });
 
@@ -148,17 +148,35 @@ rutasAuth.post("/token", limiteLogin, async (req, res) => {
   await limpiarTrasExito(ip, cuentaHash);
 
   /**
+   * Clave correcta, pero la cuenta todavía no tiene correo: salió del alta
+   * masiva del docente sin él. La app le pide que lo escriba
+   * (`POST /account/email`).
+   */
+  if (!usuario.email) {
+    throw new HttpError(403, "Escribe tu correo para continuar.", "correo_requerido");
+  }
+
+  /**
    * Clave correcta, pero el correo sigue sin confirmar.
    *
    * Solo se llega aquí con la clave buena, así que decir que la cuenta existe
    * no le cuenta nada a quien no la conociera ya. El `code` es lo que permite a
    * la app llevar al niño a la pantalla del código en vez de enseñarle un error.
+   *
+   * Se le manda el código en ese momento (sin esperar el envío): una cuenta del
+   * alta masiva nunca recibió ninguno, y la del registro puede tener uno de
+   * hace días. Si se mandó otro hace menos de un minuto, `emitirCodigo` no
+   * repite. Va el correo en la respuesta porque se pudo entrar con el usuario.
    */
   if (!usuario.email_verified) {
+    if (config.smtp.activo) {
+      enviarVerificacion(usuario).catch(() => { /* ya quedó en el registro */ });
+    }
     throw new HttpError(
       403,
-      "Todavía no confirmaste tu correo. Escribe el código que te enviamos.",
+      `Te enviamos un código a ${usuario.email}. Escríbelo para confirmar tu correo.`,
       "correo_sin_verificar",
+      { email: usuario.email },
     );
   }
 
@@ -182,6 +200,7 @@ const esquemaRegistro = esquemaDatosEstudiante.extend({ password: reglaClave });
  * se descarta el código, para que el siguiente intento no tenga que esperar.
  */
 async function enviarVerificacion(usuario: Usuario): Promise<void> {
+  if (!usuario.email) return;
   const emision = await emitirCodigo(usuario.id, "verify");
   if (!emision.ok) return;
   try {
@@ -339,6 +358,72 @@ rutasAuth.post("/register/resend", limiteCorreo, async (req, res) => {
   res.json({
     ok: true,
     detail: "Si hay una cuenta pendiente con ese correo, te enviamos un código nuevo.",
+  });
+});
+
+/** Cuerpo de `/account/email`: las credenciales de ingreso y el correo nuevo. */
+const esquemaCorreoDeCuenta = esquemaLogin.extend({
+  email: esquemaDatosEstudiante.shape.email,
+});
+
+/**
+ * El estudiante escribe su correo en el primer ingreso.
+ *
+ * Es para las cuentas del alta masiva: las que llegaron sin correo, y las que
+ * lo traían pero aún no lo confirmaron (así se corrige uno mal escrito). Pide
+ * las mismas credenciales que `/token` y cuenta los fallos en el mismo
+ * registro, para que esta puerta no sirva para probar claves saltándose el
+ * bloqueo del ingreso. Con una cuenta ya confirmada no hace nada: ese correo
+ * solo lo cambia el docente.
+ *
+ * El envío se espera, como en `/register`: si falla, el niño tiene que
+ * enterarse ahora y poder reintentar.
+ */
+rutasAuth.post("/account/email", limiteCorreo, async (req, res) => {
+  exigirCorreoConfigurado();
+  const { username, password, email } = esquemaCorreoDeCuenta.parse(req.body);
+
+  const ip = ipDe(req);
+  const cuentaHash = indiceCiego(username);
+  const veredicto = await comprobarIntentos(ip, cuentaHash);
+  if (!veredicto.permitido) {
+    throw new HttpError(
+      429,
+      `Demasiados intentos fallidos. Espera ${textoEspera(veredicto.esperaSegundos)} ` +
+      "antes de volver a intentarlo.",
+    );
+  }
+
+  const usuario = await verificarUsuario(username, password);
+  if (!usuario) {
+    await registrarIntento(ip, cuentaHash, false);
+    throw noAutorizado("Credenciales incorrectas");
+  }
+  await limpiarTrasExito(ip, cuentaHash);
+
+  if (usuario.role !== "student" || usuario.email_verified) {
+    throw new HttpError(409, "Esta cuenta ya tiene su correo confirmado. Entra con tu clave.");
+  }
+
+  try {
+    await fijarCorreo(usuario.id, email);
+  } catch (error) {
+    if (esCorreoDuplicado(error)) {
+      throw new HttpError(409, "Ese correo ya lo usa otra cuenta. Escribe el tuyo.");
+    }
+    throw error;
+  }
+  // El código que hubiera iba a otro correo: deja de valer, y así este envío
+  // no tiene que esperar el minuto entre reenvíos.
+  await descartarCodigos(usuario.id, "verify");
+
+  const actualizado = await buscarPorId(usuario.id);
+  if (!actualizado) throw new HttpError(500, "No se pudo leer la cuenta");
+  await enviarVerificacion(actualizado);
+
+  res.json({
+    email: actualizado.email,
+    detail: `Te enviamos un código a ${actualizado.email}. Escríbelo para confirmar tu correo.`,
   });
 });
 

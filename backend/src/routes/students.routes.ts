@@ -16,13 +16,16 @@
  * disponible para cualquiera que entre al panel meses después.
  */
 import { Router } from "express";
+import { z } from "zod";
 import {
   actualizarEstudiante,
   buscarEstudiante,
   cambiarClave,
   crearEstudiante,
+  crearEstudianteLote,
   eliminarEstudiante,
   esCorreoDuplicado,
+  generarUsuario,
   listarEstudiantes,
   revocarSesiones,
 } from "../db/users.js";
@@ -111,6 +114,82 @@ rutasEstudiantes.post("/students", exigirSesion, exigirDocente, async (req, res)
         "consultar: el servidor solo guarda su hash."
       : "Anota esta clave: no se puede volver a consultar. El estudiante tendrá " +
         "que cambiarla la primera vez que entre.",
+  });
+});
+
+/** Filas como máximo por alta masiva: un curso cabe de sobra, y cada clave cuesta ~200 ms de bcrypt. */
+const MAX_FILAS_LOTE = 100;
+
+/**
+ * Cada fila del Excel llega tal cual y se valida aquí, no en el esquema del
+ * cuerpo: una fila mala no puede tumbar el alta de las otras treinta. El
+ * correo es opcional; vacío equivale a no traerlo.
+ */
+const esquemaLote = z.object({
+  students: z
+    .array(z.object({ name: z.string().max(200), email: z.string().max(254).optional() }))
+    .min(1, "El archivo no trae ningún estudiante")
+    .max(MAX_FILAS_LOTE, `Como máximo ${MAX_FILAS_LOTE} estudiantes por archivo`),
+});
+
+const esquemaFilaLote = z.object({
+  name: esquemaDatosEstudiante.shape.name,
+  email: esquemaDatosEstudiante.shape.email.nullable(),
+});
+
+/**
+ * Alta masiva desde el Excel del docente.
+ *
+ * Cada cuenta nace con clave temporal de cuatro dígitos y **sin verificar**:
+ * la primera vez que el estudiante entra a la app confirma su correo con un
+ * código (o lo escribe, si la fila no lo traía) y luego elige su clave. Con
+ * correo, el usuario es ese correo; sin él se genera uno (`juan.perez`).
+ *
+ * Las filas se procesan una a una y cada una informa su resultado: un correo
+ * repetido o mal escrito deja esa fila fuera y las demás se crean igual. Las
+ * claves salen solo en esta respuesta, como en el alta individual.
+ */
+rutasEstudiantes.post("/students/bulk", exigirSesion, exigirDocente, async (req, res) => {
+  const { students } = esquemaLote.parse(req.body);
+
+  const resultados = [];
+  for (const crudo of students) {
+    const nombre = crudo.name.trim();
+    const correoCrudo = crudo.email?.trim() ?? "";
+    const fila = esquemaFilaLote.safeParse({
+      name: nombre,
+      email: correoCrudo === "" ? null : correoCrudo,
+    });
+    if (!fila.success) {
+      resultados.push({
+        name: nombre, email: correoCrudo || null, username: null, password: null,
+        ok: false, error: fila.error.issues[0]?.message ?? "Fila inválida",
+      });
+      continue;
+    }
+
+    const { name, email } = fila.data;
+    const usuario = email ?? (await generarUsuario(name));
+    const clave = generarClaveTemporal();
+    try {
+      await crearEstudianteLote(name, email, email ? null : usuario, clave);
+      resultados.push({ name, email, username: usuario, password: clave, ok: true, error: null });
+    } catch (error) {
+      if (!esCorreoDuplicado(error)) throw error;
+      resultados.push({
+        name, email, username: null, password: null, ok: false,
+        error: email ? "Ya hay una cuenta con ese correo" : "Usuario repetido; vuelve a intentarlo",
+      });
+    }
+  }
+
+  const creadas = resultados.filter(r => r.ok).length;
+  res.status(creadas > 0 ? 201 : 200).json({
+    created: creadas,
+    results: resultados,
+    detail:
+      "Descarga el Excel con las claves: no se pueden volver a consultar. Cada " +
+      "estudiante confirmará su correo y elegirá su clave al entrar a la app.",
   });
 });
 

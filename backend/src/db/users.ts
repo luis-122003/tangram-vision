@@ -45,7 +45,8 @@ const HASH_SEÑUELO = bcrypt.hashSync("cuenta-inexistente-" + Date.now(), RONDAS
 function descifrarUsuario(fila: UsuarioFila): Usuario {
   return {
     id: fila.id,
-    email: descifrarSeguro(fila.email_enc) ?? "—",
+    email: descifrarSeguro(fila.email_enc),
+    username: descifrarSeguro(fila.username_enc),
     name: descifrarSeguro(fila.name_enc) ?? "—",
     role: fila.role,
     password_hash: fila.password_hash,
@@ -70,6 +71,20 @@ export async function buscarPorEmail(email: string): Promise<Usuario | null> {
   return filas[0] ? descifrarUsuario(filas[0] as UsuarioFila) : null;
 }
 
+/**
+ * Busca por lo que el estudiante escriba al entrar: su correo o, si la cuenta
+ * salió del alta masiva sin correo, su usuario (`juan.perez`). Un correo lleva
+ * siempre `@` y un usuario nunca, así que no hay ambigüedad.
+ */
+export async function buscarPorIdentificador(identificador: string): Promise<Usuario | null> {
+  if (identificador.includes("@")) return buscarPorEmail(identificador);
+  const [filas] = await pool.query<any[]>(
+    "SELECT * FROM users WHERE username_hash = ? LIMIT 1",
+    [indiceCiego(identificador)],
+  );
+  return filas[0] ? descifrarUsuario(filas[0] as UsuarioFila) : null;
+}
+
 export async function buscarPorId(id: number): Promise<Usuario | null> {
   const [filas] = await pool.query<any[]>("SELECT * FROM users WHERE id = ? LIMIT 1", [id]);
   return filas[0] ? descifrarUsuario(filas[0] as UsuarioFila) : null;
@@ -83,10 +98,10 @@ export async function buscarPorId(id: number): Promise<Usuario | null> {
  * distinguir «ese correo no existe» de «la contraseña es otra».
  */
 export async function verificarUsuario(
-  email: string,
+  identificador: string,
   clave: string,
 ): Promise<Usuario | null> {
-  const usuario = await buscarPorEmail(email);
+  const usuario = await buscarPorIdentificador(identificador);
   const hash = usuario?.password_hash ?? HASH_SEÑUELO;
   const correcta = await bcrypt.compare(clave, hash);
   return usuario && correcta ? usuario : null;
@@ -151,7 +166,8 @@ export async function listarEstudiantes(): Promise<EstudianteResumen[]> {
   // sobre las filas de `sessions`: así el agrupamiento ocurre una vez sobre la
   // tabla de intentos y no se multiplica por cada estudiante.
   const [filas] = await pool.query<any[]>(
-    `SELECT u.id, u.email_enc, u.name_enc, u.must_change_password, u.created_at,
+    `SELECT u.id, u.email_enc, u.username_enc, u.name_enc, u.must_change_password,
+            u.email_verified, u.created_at,
             COALESCE(s.attempts, 0) AS attempts,
             COALESCE(s.passed, 0)   AS passed,
             s.last_attempt
@@ -172,7 +188,9 @@ export async function listarEstudiantes(): Promise<EstudianteResumen[]> {
     // `descifrarSeguro` y no `descifrar`: una sola fila ilegible —una clave
     // rotada a medias— no puede dejar al docente sin lista.
     name: descifrarSeguro(f.name_enc) ?? "—",
-    email: descifrarSeguro(f.email_enc) ?? "—",
+    email: descifrarSeguro(f.email_enc),
+    username: descifrarSeguro(f.username_enc),
+    email_verified: f.email_verified === 1,
     must_change_password: f.must_change_password === 1,
     created_at: f.created_at,
     attempts: Number(f.attempts ?? 0),
@@ -228,6 +246,77 @@ export async function crearEstudiante(
 }
 
 /**
+ * Usuario de ingreso para quien llega al alta masiva sin correo: `nombre.apellido`
+ * en minúsculas y sin tildes, con `2`, `3`… detrás si ya existe. Lo que no sea
+ * letra o número se cae.
+ */
+export async function generarUsuario(nombre: string): Promise<string> {
+  const partes = nombre
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map(p => p.replace(/[^a-z0-9]/g, ""))
+    .filter(p => p !== "");
+  // Nombre y primer apellido: con dos nombres y dos apellidos («Ana María
+  // Pérez Gómez») el primer apellido es el tercero.
+  const apellido = partes.length >= 4 ? partes[2] : partes[1];
+  const base = [partes[0] ?? "estudiante", apellido].filter(Boolean).join(".").slice(0, 40);
+  for (let n = 1; ; n++) {
+    const candidato = n === 1 ? base : `${base}${n}`;
+    const [filas] = await pool.query<any[]>(
+      "SELECT 1 FROM users WHERE username_hash = ? LIMIT 1",
+      [indiceCiego(candidato)],
+    );
+    if (filas.length === 0) return candidato;
+  }
+}
+
+/**
+ * Alta de una fila del Excel del docente.
+ *
+ * Nace con clave temporal y **sin verificar**, al revés que el alta individual:
+ * el estudiante confirma su correo con un código la primera vez que entra a la
+ * app. Con correo, ese correo es su usuario; sin él, entra con `usuario` y la
+ * app le pide el correo.
+ *
+ * Un usuario generado que choque con otro creado a la vez lo frena el índice
+ * único, y quien llama lo ve como un duplicado de esa fila.
+ */
+export async function crearEstudianteLote(
+  nombre: string, correo: string | null, usuario: string | null, clave: string,
+): Promise<number> {
+  const hash = await bcrypt.hash(clave, RONDAS_BCRYPT);
+  const [res] = await pool.query<any>(
+    `INSERT INTO users
+       (email_hash, email_enc, username_hash, username_enc, name_enc, password_hash,
+        role, must_change_password, email_verified)
+     VALUES (?, ?, ?, ?, ?, ?, 'student', 1, 0)`,
+    [
+      correo ? indiceCiego(correo) : null, correo ? cifrar(correo) : null,
+      usuario ? indiceCiego(usuario) : null, usuario ? cifrar(usuario) : null,
+      cifrar(nombre), hash,
+    ],
+  );
+  return Number(res.insertId);
+}
+
+/**
+ * Pone el correo que el estudiante escribió en la app. Solo mientras la cuenta
+ * no esté verificada: sirve para corregir uno mal escrito, pero nunca para
+ * cambiar el de una cuenta que ya demostró ser de su dueño. Queda sin verificar
+ * hasta que escriba el código. Un correo de otra cuenta llega como
+ * `ER_DUP_ENTRY`.
+ */
+export async function fijarCorreo(id: number, correo: string): Promise<boolean> {
+  const [res] = await pool.query<any>(
+    `UPDATE users SET email_hash = ?, email_enc = ?, email_verified = 0
+     WHERE id = ? AND role = 'student' AND email_verified = 0`,
+    [indiceCiego(correo), cifrar(correo), id],
+  );
+  return Number(res.affectedRows) > 0;
+}
+
+/**
  * Rehace nombre y clave de una cuenta que **todavía no ha verificado** su
  * correo.
  *
@@ -244,7 +333,7 @@ export async function rehacerPendiente(
   const hash = await bcrypt.hash(clave, RONDAS_BCRYPT);
   const [res] = await pool.query<any>(
     `UPDATE users SET name_enc = ?, password_hash = ?, must_change_password = 0
-     WHERE id = ? AND email_verified = 0`,
+     WHERE id = ? AND email_verified = 0 AND must_change_password = 0`,
     [cifrar(nombre), hash, id],
   );
   return Number(res.affectedRows) > 0;
@@ -263,7 +352,7 @@ export async function marcarVerificado(id: number): Promise<void> {
 export async function purgarPendientes(): Promise<void> {
   await pool.query(
     `DELETE FROM users
-     WHERE email_verified = 0 AND role = 'student'
+     WHERE email_verified = 0 AND role = 'student' AND must_change_password = 0
        AND created_at < (NOW() - INTERVAL 7 DAY)`,
   );
 }

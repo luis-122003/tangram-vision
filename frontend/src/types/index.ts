@@ -18,7 +18,12 @@ export interface User {
 export interface Student {
   id:    number;
   name:  string;
-  email: string;
+  /** Null si salió del alta masiva sin correo y todavía no lo escribió en la app. */
+  email: string | null;
+  /** Usuario generado en el alta masiva para quien llegó sin correo. */
+  username: string | null;
+  /** Ya confirmó su correo con el código que le llegó. */
+  email_verified: boolean;
   /** Sigue con la clave temporal: todavía no ha activado su perfil. */
   must_change_password: boolean;
   created_at:   string;
@@ -45,6 +50,23 @@ export interface StudentCreated {
   student: Student | null;
   temporary_password: string;
   detail: string;
+}
+
+/** Resultado de una fila del alta masiva. */
+export interface BulkRow {
+  name:     string;
+  email:    string | null;
+  /** Con lo que entra: el correo, o el usuario generado si no traía correo. */
+  username: string | null;
+  password: string | null;
+  ok:       boolean;
+  error:    string | null;
+}
+
+export interface BulkResult {
+  created: number;
+  results: BulkRow[];
+  detail:  string;
 }
 
 // ─── Figuras del catálogo ──────────────────────────────────────────────────────

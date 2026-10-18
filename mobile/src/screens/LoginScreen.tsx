@@ -7,7 +7,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Crypto from "expo-crypto";
 import Svg, { Polygon, Rect } from "react-native-svg";
 import {
-  changePassword, CorreoSinVerificar, login, logout, olvideClave,
+  agregarCorreo, changePassword, CorreoRequerido, CorreoSinVerificar, login, logout, olvideClave,
   reenviarCodigo, registrar, restablecerClave, verificarCorreo,
 } from "../api/client";
 import type { User } from "../api/types";
@@ -57,12 +57,18 @@ const LAST_STUDENT = "tangram.lastStudent";
  * Con la clave elegida se va derecho al catálogo, y el docente ve aparecer la
  * cuenta en su panel sin haber hecho nada.
  *
+ * Y sirve para el **primer ingreso de una cuenta que creó el docente** desde
+ * su Excel. Se entra con el usuario (o el correo) y la clave temporal que él
+ * repartió; si la cuenta no tiene correo, se pide (`correo`) y llega un código;
+ * si lo tiene, el código llega al entrar. Con el código bueno se entra, y la
+ * raíz de la app obliga a cambiar la clave temporal por una propia.
+ *
  * Y sirve para **recuperar la clave olvidada**: se pide un código al correo
  * (`olvide`) y con él se elige un PIN nuevo (`restablecer`). Solo funciona con
  * cuentas cuyo correo está confirmado; las que dio de alta el docente con un
  * correo de aula siguen pidiéndole a él que la regenere.
  */
-type Modo = "entrar" | "registro" | "codigo" | "clave" | "olvide" | "restablecer";
+type Modo = "entrar" | "registro" | "codigo" | "clave" | "olvide" | "restablecer" | "correo";
 
 /** Segundos que el servidor hace esperar entre dos envíos (EMAIL_CODE_RESEND). */
 const ESPERA_REENVIO = 60;
@@ -100,7 +106,8 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
 
   const [account,    setAccount]    = useState<{ name: string; email: string } | null>(null);
   const [editing,    setEditing]    = useState(false);
-  const [email,      setEmail]      = useState("estudiante@tangram.edu");
+  /** Usuario o correo con el que se entra. */
+  const [email,      setEmail]      = useState("");
   const [pin,        setPin]        = useState("");
   const [error,      setError]      = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -132,6 +139,15 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
   const [aviso,      setAviso]      = useState("");
   /** Segundos que faltan para poder pedir otro código. */
   const [espera,     setEspera]     = useState(0);
+  /**
+   * Primer ingreso de una cuenta del docente: con qué se entró. Hace falta para
+   * guardar el correo (`/account/email` pide las mismas credenciales) y para
+   * poder corregirlo desde el paso del código si se escribió mal.
+   */
+  const [primerIngreso, setPrimerIngreso] =
+    useState<{ usuario: string; clave: string } | null>(null);
+  /** El correo que escribe en ese primer ingreso. */
+  const [correoPrimer, setCorreoPrimer] = useState("");
 
   useEffect(() => {
     AsyncStorage.getItem(LAST_STUDENT)
@@ -168,7 +184,7 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
     setCodigo("");
     setError("");
     setAviso("");
-    if (nuevo === "entrar") setPendiente(null);
+    if (nuevo === "entrar") { setPendiente(null); setPrimerIngreso(null); }
   }
 
   /** Pasa a escribir el código de la cuenta recién creada o sin confirmar. */
@@ -181,14 +197,17 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
     setEspera(esperar ? ESPERA_REENVIO : 0);
   }
 
+  /** Hay que escribir con qué cuenta se entra (no hay una recordada, o se cambia). */
+  const askEmail = editing || account === null;
   /** Los dos datos del registro están escritos y tienen pinta de serlo. */
   const datosDeRegistro = nombreNuevo.trim().length >= 2 && correoValido(correoNuevo);
   const canSubmit =
     modo === "registro"    ? datosDeRegistro :
     modo === "codigo"      ? esCodigo(codigo) :
     modo === "olvide"      ? correoValido(correoOlvido) :
+    modo === "correo"      ? correoValido(correoPrimer) :
     modo === "restablecer" ? esCodigo(codigo) && pin.length === PIN_LENGTH :
-    pin.length === PIN_LENGTH;
+    pin.length === PIN_LENGTH && (!askEmail || email.trim() !== "");
 
   async function submit() {
     if (!canSubmit || submitting) return;
@@ -200,6 +219,7 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
       else if (modo === "clave") await elegirClave(pin);
       else if (modo === "olvide") await pedirRecuperacion();
       else if (modo === "restablecer") await cambiarClaveOlvidada();
+      else if (modo === "correo") await guardarCorreo();
       else await entrar(pin);
     } catch (e) {
       setAviso("");
@@ -230,9 +250,19 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
       usuario = await login(clean, clave);
     } catch (e) {
       // Clave buena, correo sin confirmar: no es un error, es el paso que falta.
-      // Se deja pedir otro código al momento: el último pudo llegar hace días.
+      // El servidor acaba de mandar el código y dice a qué correo: se pudo
+      // entrar con el usuario, y es a ese correo adonde hay que verificar.
       if (e instanceof CorreoSinVerificar) {
-        pedirCodigo(clean.toLowerCase(), clave, false, e.message, false);
+        setPrimerIngreso({ usuario: clean, clave });
+        pedirCodigo(e.email ?? clean.toLowerCase(), clave, false, e.message, true);
+        return;
+      }
+      // Cuenta del Excel del docente sin correo: primero hay que escribirlo.
+      if (e instanceof CorreoRequerido) {
+        setPrimerIngreso({ usuario: clean, clave });
+        setCorreoPrimer("");
+        cambiarModo("correo");
+        setAviso("Escribe tu correo. Te mandaremos un código para confirmar que es tuyo.");
         return;
       }
       throw e;
@@ -319,6 +349,20 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
     onLogin(usuario, nueva);
   }
 
+  /** Guarda el correo del primer ingreso y pasa a escribir el código que le llegó. */
+  async function guardarCorreo(): Promise<void> {
+    if (!primerIngreso) return;
+    const { usuario, clave } = primerIngreso;
+    const correo = await agregarCorreo(usuario, clave, correoPrimer.trim().toLowerCase());
+    pedirCodigo(correo, clave, false, `Te enviamos un código a ${correo}. Escríbelo aquí.`, true);
+  }
+
+  /** Desde el paso del código, vuelve a escribir el correo (estaba mal). */
+  function corregirCorreo() {
+    setCorreoPrimer(pendiente?.correo ?? "");
+    cambiarModo("correo");
+  }
+
   /** Abre la recuperación con el correo que ya se conoce, si hay uno. */
   function empezarRecuperacion() {
     const conocido = email.trim();
@@ -365,7 +409,6 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
     }
   }
 
-  const askEmail = editing || account === null;
   /** Los pasos que se escriben con el teclado de cuatro dígitos. */
   const conTeclado = modo === "entrar" || modo === "clave" || modo === "restablecer";
   // Las fichas decorativas se anclan al borde derecho, sea cual sea el ancho.
@@ -437,6 +480,15 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
                 {espera > 0 ? `Otro en ${espera} s` : "Enviar otro"}
               </Text>
             </Pressable>
+            {modo === "codigo" && primerIngreso && (
+              <Pressable
+                onPress={corregirCorreo} style={s.alternar} accessibilityRole="button"
+                accessibilityLabel="Cambiar el correo al que llega el código"
+              >
+                <Text style={s.alternarTexto} numberOfLines={1}>¿Correo equivocado?</Text>
+                <Text style={labelType(12, C.ink)}>Cambiarlo</Text>
+              </Pressable>
+            )}
           </View>
         ) : modo === "clave" ? (
           /* La cuenta que se acaba de confirmar. Solo se muestra: el correo ya
@@ -445,6 +497,20 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
             <Eyebrow color={C.ink}>Cuenta confirmada</Eyebrow>
             <View style={[s.mt8, s.emailBox, inset(4)]}>
               <Text style={s.emailInput} numberOfLines={1}>{pendiente?.correo}</Text>
+            </View>
+          </View>
+        ) : modo === "correo" ? (
+          <View>
+            <Eyebrow color={C.ink}>Tu correo</Eyebrow>
+            <View style={[s.mt8, s.emailBox, inset(4)]}>
+              <TextInput
+                style={s.emailInput} value={correoPrimer}
+                onChangeText={t => { setError(""); setCorreoPrimer(t); }}
+                autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
+                maxLength={254}
+                placeholder="tu-correo@colegio.edu" placeholderTextColor={C.ghost}
+                accessibilityLabel="Tu correo"
+              />
             </View>
           </View>
         ) : modo === "olvide" ? (
@@ -487,14 +553,18 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
         ) : (
           /* Quién entra */
           <View>
-            <Eyebrow color={C.ink}>{askEmail ? "Escribe tu correo" : "Estás entrando como"}</Eyebrow>
+            <Eyebrow color={C.ink}>
+              {askEmail ? "Escribe tu usuario o correo" : "Estás entrando como"}
+            </Eyebrow>
             {askEmail ? (
               <View style={[s.mt8, s.emailBox, inset(4)]}>
+                {/* Usuario (juan.perez) o correo: el docente reparte uno u otro
+                    según su Excel trajera correo o no. */}
                 <TextInput
                   style={s.emailInput} value={email} onChangeText={setEmail}
                   autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
-                  placeholder="usuario@tangram.edu" placeholderTextColor={C.ghost}
-                  accessibilityLabel="Correo del estudiante"
+                  placeholder="usuario o correo" placeholderTextColor={C.ghost}
+                  accessibilityLabel="Usuario o correo del estudiante"
                 />
               </View>
             ) : (
@@ -509,7 +579,7 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
                 <Pressable
                   onPress={() => { setEditing(true); setPin(""); }}
                   style={s.change} accessibilityRole="button"
-                  accessibilityLabel="Entrar con otro correo"
+                  accessibilityLabel="Entrar con otra cuenta"
                 >
                   <Text style={labelType(12, C.ink)}>Cambiar</Text>
                 </Pressable>
@@ -597,7 +667,8 @@ export default function LoginScreen({ onLogin, onOpenMaterials }: {
             accessibilityLabel="Volver a entrar con mi clave"
           >
             <Text style={s.alternarTexto}>
-              {modo === "registro" ? "¿Ya tienes cuenta?" : "¿Te acordaste?"}
+              {modo === "registro" ? "¿Ya tienes cuenta?"
+                : primerIngreso ? "¿Otra cuenta?" : "¿Te acordaste?"}
             </Text>
             <Text style={labelType(12, C.ink)}>Entrar</Text>
           </Pressable>

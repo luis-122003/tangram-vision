@@ -1,9 +1,13 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import {
-  createStudent, deleteStudent, getStudents, resetStudentPassword, updateStudent,
+  createStudent, createStudentsBulk, deleteStudent, getStudents, resetStudentPassword,
+  updateStudent,
 } from "../api/client";
 import { BRUT, T } from "../theme/brut";
-import type { Student, StudentCreated } from "../types";
+import type { BulkResult, Student, StudentCreated } from "../types";
+import {
+  descargarCredenciales, descargarPlantilla, leerExcelEstudiantes, type FilaImportada,
+} from "../utils/excelEstudiantes";
 
 /**
  * Gestión de estudiantes: alta, edición, baja y clave temporal.
@@ -57,6 +61,13 @@ export default function StudentsAdmin() {
   const [editMail, setEditMail] = useState("");
   const [confirmando, setConfirmando] = useState<{ id: number; que: "baja" | "clave" } | null>(null);
   const [ocupado,  setOcupado]  = useState(false);
+
+  // Alta masiva: las filas leídas del Excel (vista previa) y el resultado.
+  const [filasExcel, setFilasExcel] = useState<FilaImportada[] | null>(null);
+  const [archivo,    setArchivo]    = useState("");
+  const [leyendo,    setLeyendo]    = useState(false);
+  const [creandoLote, setCreandoLote] = useState(false);
+  const [lote,       setLote]       = useState<BulkResult | null>(null);
 
   async function cargar() {
     setError("");
@@ -129,8 +140,50 @@ export default function StudentsAdmin() {
   function empezarEdicion(s: Student) {
     setEditId(s.id);
     setEditName(s.name);
-    setEditMail(s.email);
+    setEditMail(s.email ?? "");
     setConfirmando(null);
+  }
+
+  /** Lee el Excel elegido y enseña la vista previa; todavía no crea nada. */
+  async function elegirExcel(e: React.ChangeEvent<HTMLInputElement>) {
+    const elegido = e.target.files?.[0];
+    e.target.value = "";   // permite volver a elegir el mismo archivo
+    if (!elegido) return;
+    setError(""); setLote(null); setLeyendo(true);
+    try {
+      setFilasExcel(await leerExcelEstudiantes(elegido));
+      setArchivo(elegido.name);
+    } catch (err) {
+      setFilasExcel(null);
+      setError(err instanceof Error ? err.message : "No se pudo leer el Excel");
+    } finally {
+      setLeyendo(false);
+    }
+  }
+
+  const filasValidas = filasExcel?.filter(f => !f.problema) ?? [];
+
+  /**
+   * Crea las cuentas de las filas válidas y descarga en el acto el Excel con
+   * usuario y clave: es el único momento en que esas claves existen fuera del
+   * hash, así que la descarga no espera a que el docente pulse nada.
+   */
+  async function crearLote() {
+    if (creandoLote || filasValidas.length === 0) return;
+    setCreandoLote(true); setError("");
+    try {
+      const r = await createStudentsBulk(
+        filasValidas.map(f => (f.email ? { name: f.name, email: f.email } : { name: f.name })),
+      );
+      setLote(r);
+      setFilasExcel(null);
+      await descargarCredenciales(r.results);
+      await cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudieron crear las cuentas");
+    } finally {
+      setCreandoLote(false);
+    }
   }
 
   /**
@@ -259,6 +312,110 @@ export default function StudentsAdmin() {
         </p>
       </form>
 
+      {/* ── Alta masiva desde Excel ──────────────────────────────────────── */}
+      <div style={{ padding: "1.4rem", ...BRUT.raised(6) }}>
+        <p style={{ ...T.title(18), margin: "0 0 8px", textTransform: "uppercase" }}>
+          Dar de alta desde Excel
+        </p>
+        <p style={{ ...T.body(BRUT.muted), margin: "0 0 14px", fontSize: 12 }}>
+          Sube un .xlsx con las columnas Nombres, Apellidos y Correo (el correo es
+          opcional). Se crean todas las cuentas y se descarga otro Excel con el
+          usuario y la clave de cada estudiante. Al entrar a la app, cada uno
+          confirma su correo con un código —o lo escribe, si no venía— y elige su
+          propia clave.
+        </p>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <label style={{
+            ...BRUT.button(leyendo || creandoLote, BRUT.accent),
+            cursor: leyendo || creandoLote ? "default" : "pointer",
+          }}>
+            {leyendo ? "Leyendo…" : "Elegir Excel"}
+            <input
+              type="file" onChange={e => void elegirExcel(e)} disabled={leyendo || creandoLote}
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              style={{ display: "none" }} aria-label="Excel con el listado de estudiantes"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void descargarPlantilla().catch(() => setError("No se pudo generar la plantilla"))}
+            style={{ ...botonFila, padding: "10px 14px" }}
+          >Descargar plantilla</button>
+        </div>
+
+        {filasExcel && (
+          <div style={{ marginTop: 18 }}>
+            <p style={{ ...T.body(BRUT.ink), margin: "0 0 10px", fontWeight: 700 }}>
+              {archivo}: {filasExcel.length} filas · {filasValidas.length} listas para crear
+              {filasExcel.length > filasValidas.length &&
+                ` · ${filasExcel.length - filasValidas.length} con problemas (no se crearán)`}
+            </p>
+            <div style={{ overflowX: "auto", maxHeight: 320, overflowY: "auto" }}>
+              <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse", minWidth: 560 }}>
+                <thead>
+                  <tr style={{ background: BRUT.ink }}>
+                    {["Fila", "Nombre", "Correo", ""].map(h => (
+                      <th key={h} style={{
+                        ...T.eyebrow(BRUT.paper), fontSize: 10, padding: "9px 12px", textAlign: "left",
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasExcel.map(f => (
+                    <tr key={f.fila} style={{ background: f.problema ? BRUT.danger : undefined }}>
+                      <td style={{ ...celda, color: BRUT.muted }}>{f.fila}</td>
+                      <td style={{ ...celda, fontWeight: 700 }}>{f.name || "—"}</td>
+                      <td style={celda}>
+                        {f.email || <span style={{ color: BRUT.muted }}>sin correo · se genera usuario</span>}
+                      </td>
+                      <td style={{ ...celda, fontWeight: 700 }}>{f.problema ?? "Lista"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
+              <button
+                type="button" onClick={() => void crearLote()}
+                disabled={creandoLote || filasValidas.length === 0}
+                style={BRUT.button(creandoLote || filasValidas.length === 0, BRUT.success)}
+              >{creandoLote
+                ? "Creando cuentas…"
+                : `Crear ${filasValidas.length} cuenta${filasValidas.length === 1 ? "" : "s"}`}</button>
+              <button
+                type="button" onClick={() => setFilasExcel(null)} disabled={creandoLote}
+                style={{ ...botonFila, padding: "10px 14px" }}
+              >Cancelar</button>
+            </div>
+          </div>
+        )}
+
+        {lote && (
+          <div style={{ marginTop: 18, padding: "1rem 1.2rem", ...BRUT.raised(4, BRUT.warning) }}>
+            <p style={{ ...T.body(BRUT.ink), margin: "0 0 6px", fontWeight: 800 }}>
+              {lote.created} de {lote.results.length} cuentas creadas. Se descargó el
+              Excel con los usuarios y las claves.
+            </p>
+            <p style={{ ...T.body(BRUT.ink), margin: "0 0 10px", fontSize: 13 }}>
+              Guárdalo bien: las claves no se pueden volver a consultar.
+              {lote.results.some(r => !r.ok) &&
+                " Las filas que no se crearon aparecen en el Excel con el motivo."}
+            </p>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button" onClick={() => void descargarCredenciales(lote.results)}
+                style={{ ...BRUT.button(false, BRUT.card), fontSize: 13 }}
+              >Descargar otra vez</button>
+              <button
+                type="button" onClick={() => setLote(null)}
+                style={{ ...BRUT.button(false, BRUT.success), fontSize: 13 }}
+              >Ya lo guardé</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {error !== "" && (
         <div style={{ padding: "1rem 1.3rem", ...BRUT.raised(4, BRUT.danger) }}>
           <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: BRUT.ink }}>{error}</p>
@@ -303,7 +460,7 @@ export default function StudentsAdmin() {
             <table style={{ width: "100%", fontSize: 13, minWidth: 880, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: BRUT.ink }}>
-                  {["Estudiante", "Correo", "Estado", "Alta", "Intentos", "Último intento", ""].map(h => (
+                  {["Estudiante", "Correo / usuario", "Estado", "Alta", "Intentos", "Último intento", ""].map(h => (
                     <th key={h} style={{
                       ...T.eyebrow(BRUT.paper), fontSize: 10,
                       padding: "11px 14px", textAlign: "left",
@@ -327,17 +484,20 @@ export default function StudentsAdmin() {
                         {editando
                           ? <input value={editMail} onChange={e => setEditMail(e.target.value)}
                                    style={{ ...campo, fontSize: 13 }} type="email" aria-label="Correo" />
-                          : s.email}
+                          : s.email ?? <span style={{ fontFamily: "var(--font-mono)" }}>{s.username}</span>}
                       </td>
                       <td style={celda}>
                         {/* El color no es el único canal: la palabra lo dice. */}
                         <span style={{
                           display: "inline-block", ...T.eyebrow(BRUT.ink), fontSize: 10,
                           padding: "4px 10px",
-                          background: s.must_change_password ? BRUT.warning : BRUT.success,
+                          background: s.must_change_password || !s.email_verified
+                            ? BRUT.warning : BRUT.success,
                           border: `${BRUT.borderThin}px solid ${BRUT.ink}`,
                         }}>
-                          {s.must_change_password ? "Clave temporal" : "Perfil activo"}
+                          {!s.email ? "Falta su correo"
+                            : !s.email_verified ? "Correo sin confirmar"
+                            : s.must_change_password ? "Clave temporal" : "Perfil activo"}
                         </span>
                       </td>
                       {/* Cuándo se creó la cuenta. Es lo que distingue, en una
@@ -360,8 +520,11 @@ export default function StudentsAdmin() {
                             <button
                               style={{ ...botonFila, background: BRUT.success }}
                               onClick={() => void accion(async () => {
+                                // Sin correo (alta masiva) se deja vacío: se
+                                // manda solo si el docente escribió uno.
                                 await updateStudent(s.id, {
-                                  name: editName.trim(), email: editMail.trim(),
+                                  name: editName.trim(),
+                                  ...(editMail.trim() ? { email: editMail.trim() } : {}),
                                 });
                                 setEditId(null);
                               })}

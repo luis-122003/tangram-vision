@@ -77,7 +77,7 @@ async function existeColumna(tabla: string, columna: string): Promise<boolean> {
  * el `CREATE` y tragarse el error, que taparía también los errores de verdad.
  */
 async function asegurarIndice(
-  tabla: string, nombre: string, columnas: string,
+  tabla: string, nombre: string, columnas: string, unico = false,
 ): Promise<void> {
   const [filas] = await pool.query<any[]>(
     `SELECT 1 FROM information_schema.STATISTICS
@@ -89,7 +89,9 @@ async function asegurarIndice(
   // Ni el nombre ni las columnas vienen de fuera —son literales de este
   // archivo—, que es lo que permite interpolarlos: MySQL no admite marcadores
   // `?` para identificadores.
-  await pool.query(`CREATE INDEX \`${nombre}\` ON \`${tabla}\` (${columnas})`);
+  await pool.query(
+    `CREATE ${unico ? "UNIQUE " : ""}INDEX \`${nombre}\` ON \`${tabla}\` (${columnas})`,
+  );
   console.log(`[migración] índice ${nombre} creado sobre ${tabla}(${columnas})`);
 }
 
@@ -97,11 +99,15 @@ async function crearTablas(): Promise<void> {
   // `email_hash` es el índice ciego: HMAC del correo, único, y por el que se
   // busca en el login. El correo y el nombre van cifrados en columnas TEXT
   // porque un cifrado en base64 no cabe en el VARCHAR original.
+  //
+  // El correo es NULL en las cuentas del alta masiva que llegaron sin él: el
+  // estudiante lo escribe en la app al entrar la primera vez, y hasta entonces
+  // entra con su usuario (`username_hash`). UNIQUE admite varios NULL.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
         id            INT AUTO_INCREMENT PRIMARY KEY,
-        email_hash    CHAR(64) NOT NULL UNIQUE,
-        email_enc     TEXT NOT NULL,
+        email_hash    CHAR(64) NULL UNIQUE,
+        email_enc     TEXT NULL,
         name_enc      TEXT NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role          ENUM('student','teacher') NOT NULL,
@@ -195,6 +201,23 @@ async function crearTablas(): Promise<void> {
  */
 async function asegurarIndices(): Promise<void> {
   await asegurarIndice("sessions", "idx_sessions_student", "student_id, created_at");
+  // Va después de `asegurarColumnas`, que es quien crea la columna.
+  await asegurarIndice("users", "uk_users_username_hash", "username_hash", true);
+}
+
+/**
+ * El correo deja de ser obligatorio: las cuentas del alta masiva pueden nacer
+ * sin él (ver `crearTablas`). Una base creada antes lo tiene `NOT NULL`.
+ */
+async function correoOpcional(): Promise<void> {
+  const [filas] = await pool.query<any[]>(
+    `SELECT IS_NULLABLE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'email_hash'`,
+    [config.db.database],
+  );
+  if (filas[0]?.IS_NULLABLE !== "NO") return;
+  await pool.query("ALTER TABLE users MODIFY email_hash CHAR(64) NULL, MODIFY email_enc TEXT NULL");
+  console.log("[migración] el correo de users pasa a ser opcional");
 }
 
 /**
@@ -287,6 +310,13 @@ const COLUMNAS_REQUERIDAS: ReadonlyArray<[string, string, string]> = [
    * explícito, y esa cuenta no recibe sesión hasta que confirma el código.
    */
   ["users", "email_verified", "TINYINT(1) NOT NULL DEFAULT 1"],
+  /**
+   * Usuario generado en el alta masiva para quien llegó sin correo
+   * (`juan.perez`). Índice ciego para el login y la copia cifrada para el panel
+   * del docente, igual que el correo. NULL en el resto de cuentas.
+   */
+  ["users", "username_hash", "CHAR(64) NULL"],
+  ["users", "username_enc", "TEXT NULL"],
 ];
 
 async function asegurarColumnas(): Promise<void> {
@@ -394,9 +424,10 @@ async function sembrarFiguras(): Promise<void> {
 export async function inicializarBaseDeDatos(): Promise<void> {
   await asegurarBaseDeDatos();
   await crearTablas();
-  await asegurarIndices();
   await migrarDatosPersonales();
   await asegurarColumnas();
+  await correoOpcional();
+  await asegurarIndices();
   await sembrarUsuarios();
   await sembrarFiguras();
   console.log(

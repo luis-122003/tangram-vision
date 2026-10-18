@@ -22,6 +22,8 @@ export class HttpError extends Error {
      * 403 que no significa «no puedes» sino «te falta confirmar el correo».
      */
     readonly codigo?: string,
+    /** Campos que viajan junto a `detail` y `code` (p. ej. el correo pendiente). */
+    readonly extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "HttpError";
@@ -54,9 +56,11 @@ export function manejadorDeErrores(
   }
 
   if (err instanceof HttpError) {
-    res.status(err.status).json(
-      err.codigo ? { detail: err.message, code: err.codigo } : { detail: err.message },
-    );
+    res.status(err.status).json({
+      detail: err.message,
+      ...(err.codigo ? { code: err.codigo } : {}),
+      ...err.extra,
+    });
     return;
   }
 

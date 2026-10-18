@@ -194,7 +194,21 @@ export interface LoginResponse {
  * Es un tipo propio porque la pantalla de ingreso no lo muestra como un error:
  * lleva al niño a escribir el código que recibió (o a pedir otro).
  */
-export class CorreoSinVerificar extends Error {}
+export class CorreoSinVerificar extends Error {
+  /**
+   * El correo al que se mandó el código. Viene del servidor porque el niño
+   * pudo entrar con su usuario (alta masiva del docente) y no con el correo.
+   */
+  constructor(mensaje: string, readonly email: string | null) {
+    super(mensaje);
+  }
+}
+
+/**
+ * La clave es correcta pero la cuenta todavía no tiene correo: el docente la
+ * creó desde su Excel sin él. La pantalla le pide que lo escriba.
+ */
+export class CorreoRequerido extends Error {}
 
 /**
  * Una petición sin sesión —entrar, registrarse, verificar el correo, recuperar
@@ -228,7 +242,10 @@ async function pedirSinSesion<T>(path: string, init: RequestInit, fallo: string)
       const err = await res.json().catch(() => null);
       const mensaje = detailToMessage(err?.detail, fallo);
       if (res.status === 403 && err?.code === "correo_sin_verificar") {
-        throw new CorreoSinVerificar(mensaje);
+        throw new CorreoSinVerificar(mensaje, typeof err?.email === "string" ? err.email : null);
+      }
+      if (res.status === 403 && err?.code === "correo_requerido") {
+        throw new CorreoRequerido(mensaje);
       }
       throw new Error(mensaje);
     }
@@ -332,6 +349,21 @@ export async function verificarCorreo(
 }
 
 /** Pide otro código de verificación. Responde igual exista o no la cuenta. */
+/**
+ * Pone el correo de una cuenta del alta masiva (o corrige uno sin confirmar) y
+ * hace que le llegue el código. Pide las mismas credenciales del ingreso.
+ * Devuelve el correo tal como quedó guardado.
+ */
+export async function agregarCorreo(
+  usuario: string, clave: string, correo: string,
+): Promise<string> {
+  const r = await postJson<{ email: string }>(
+    "/account/email", { username: usuario, password: clave, email: correo },
+    "No se pudo guardar el correo",
+  );
+  return r.email;
+}
+
 export async function reenviarCodigo(email: string): Promise<void> {
   await postJson("/register/resend", { email }, "No se pudo reenviar el código");
 }

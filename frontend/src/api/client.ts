@@ -1,6 +1,6 @@
 import type {
   PredictRequest, PredictResponse, SessionRecord, StudentStats, SessionRow,
-  Figure, NewFigure, SilhouetteResult, Student, StudentCreated, User,
+  Figure, NewFigure, SilhouetteResult, Student, StudentCreated, User, BulkResult,
 } from "../types";
 import {
   actualizarAcceso, cabeceraAuth, cerrarSesion, iniciarSesion,
@@ -338,7 +338,7 @@ export async function getStudentStats(studentId: number): Promise<StudentStats> 
 
 // ─── Gestión de estudiantes (solo docente) ─────────────────────────────────────
 /**
- * Estas cinco llamadas responden 403 a un estudiante. No es solo una cuestión
+ * Estas llamadas responden 403 a un estudiante. No es solo una cuestión
  * de permisos: son los datos personales de todo el curso, y el backend los
  * comprueba contra la base en cada petición, no contra lo que diga el token.
  */
@@ -365,6 +365,19 @@ export async function createStudent(
   return apiFetch<StudentCreated>("/students", {
     method: "POST",
     body:   JSON.stringify(password ? { name, email, password } : { name, email }),
+  });
+}
+
+/**
+ * Alta masiva desde el Excel. Cada fila vuelve con su resultado y, si se creó,
+ * con su usuario y su clave temporal, que solo existen en esta respuesta.
+ */
+export async function createStudentsBulk(
+  students: { name: string; email?: string }[],
+): Promise<BulkResult> {
+  return apiFetch<BulkResult>("/students/bulk", {
+    method: "POST",
+    body:   JSON.stringify({ students }),
   });
 }
 

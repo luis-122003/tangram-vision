@@ -12,6 +12,7 @@
     "rotar-secretos": "node scripts/rotar-secretos.mjs",
     "probar-seguridad": "node scripts/probar-seguridad.mjs",
     "probar-correo": "node scripts/probar-correo.mjs",
+    "probar-alta-masiva": "tsx scripts/probar-alta-masiva.mjs",
     "auditar": "npm audit --omit=dev"
   },
   "engines": {

@@ -10,8 +10,12 @@ export type Dificultad = "Fácil" | "Medio" | "Difícil";
  */
 export interface UsuarioFila {
   id: number;
-  email_hash: string;
-  email_enc: string;
+  /** NULL en una cuenta del alta masiva que todavía no dio su correo. */
+  email_hash: string | null;
+  email_enc: string | null;
+  /** Usuario generado en el alta masiva para quien llegó sin correo. */
+  username_hash: string | null;
+  username_enc: string | null;
   name_enc: string;
   password_hash: string;
   role: Rol;
@@ -38,7 +42,10 @@ export interface UsuarioFila {
 /** Usuario ya descifrado, que es con lo que trabaja el resto del backend. */
 export interface Usuario {
   id: number;
-  email: string;
+  /** Null mientras la cuenta no tenga correo (alta masiva sin él). */
+  email: string | null;
+  /** Usuario de ingreso generado en el alta masiva, si lo tiene. */
+  username: string | null;
   name: string;
   role: Rol;
   password_hash: string;
@@ -59,7 +66,12 @@ export interface Usuario {
 export interface EstudianteResumen {
   id: number;
   name: string;
-  email: string;
+  /** Null si todavía no dio su correo. */
+  email: string | null;
+  /** Usuario generado en el alta masiva, si lo tiene. */
+  username: string | null;
+  /** El estudiante ya confirmó su correo con el código. */
+  email_verified: boolean;
   must_change_password: boolean;
   created_at: Date;
   /** Intentos registrados y cuántos de ellos dio por buenos el validador. */

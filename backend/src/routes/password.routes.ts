@@ -146,10 +146,11 @@ rutasClave.post("/password/forgot", limiteCorreo, async (req, res) => {
   const { email } = esquemaCorreo.parse(req.body);
 
   const usuario = await buscarPorEmail(email);
-  if (usuario?.email_verified) {
+  if (usuario?.email_verified && usuario.email) {
+    const correo = usuario.email;
     const emision = await emitirCodigo(usuario.id, "reset");
     if (emision.ok) {
-      enviarCorreo(correoRecuperacion(usuario.email, usuario.name, emision.codigo))
+      enviarCorreo(correoRecuperacion(correo, usuario.name, emision.codigo))
         .catch(async (error: Error) => {
           console.error("[correo] no se pudo enviar la recuperación:", error.message);
           await descartarCodigos(usuario.id, "reset").catch(() => {});
