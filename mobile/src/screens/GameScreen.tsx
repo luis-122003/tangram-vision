@@ -16,7 +16,7 @@ import {
   Bar, Card, Eyebrow, IconButton, Note, PrimaryButton, SecondaryButton,
 } from "../components/ui";
 import {
-  C, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY, TOTAL_PIECES, pieceCount,
+  C, S, F, B, SAFE_TOP, SAFE_BOTTOM, PIECE_INVENTORY, TOTAL_PIECES,
   cardColor, display, shout, formatTime, pct, tabular,
   raised, flat, onFill,
 } from "../theme";
@@ -663,9 +663,6 @@ export default function GameScreen({
   const missing = result.pieces?.missing ?? {};
   const extra = result.pieces?.extra ?? {};
   const missingCount = Object.values(missing).reduce((a, b) => a + b, 0);
-  const missingNames = Object.entries(missing)
-    .map(([kind, n]) => pieceCount(kind, n))
-    .join(", ");
 
   // Las cinco cosas que tiene que cumplir un Tangram bien armado, cada una con
   // su cifra: es lo que convierte el porcentaje en algo accionable.
@@ -697,13 +694,9 @@ export default function GameScreen({
     },
   ] : [];
 
-  // Se dibujan las 7 fichas esperadas y se marcan como ausentes tantas de cada
-  // tipo como diga `pieces.missing`.
-  const slots: { kind: string; missing: boolean }[] = [];
-  for (const p of PIECE_INVENTORY) {
-    const gone = missing[p.kind] ?? 0;
-    for (let i = 0; i < p.count; i++) slots.push({ kind: p.kind, missing: i >= p.count - gone });
-  }
+  const hayDeMas = Object.keys(extra).length > 0;
+  const todasLasFichas =
+    missingCount === 0 && !hayDeMas && result.pieces_used === TOTAL_PIECES;
 
   const worst = result.segments.length
     ? result.segments.reduce((a, b) => (b.coverage < a.coverage ? b : a))
@@ -889,39 +882,17 @@ export default function GameScreen({
           </Card>
         )}
 
-        {/* Fichas detectadas por el modelo */}
+        {/* Las fichas: una frase y nada más. La cuenta del detector puede
+            fallar por una ficha que la cámara no vio, así que cuando no
+            cuadra se le pide al niño que lo revise, sin afirmar cuál falta. */}
         <Card style={s.gapSm} contentStyle={s.piecesCard}>
-          <View style={s.piecesHead}>
-            <Eyebrow>Fichas detectadas</Eyebrow>
-            {/* `pieces_used` es lo que contó el detector: con fichas de más
-                dirá "9 de 7", que es justo lo que hay que contarle. */}
-            <Text style={[display(15, C.ink), tabular]}>
-              {result.pieces_used} de {TOTAL_PIECES}
-            </Text>
-          </View>
-          <View style={s.piecesRow}>
-            {slots.map((slot, i) => (
-              <TangramPiece
-                key={i} kind={slot.kind} size={34}
-                missing={slot.missing}
-              />
-            ))}
-          </View>
-          {missingCount > 0 && (
-            <View style={s.legend}>
-              <View style={s.legendMark} />
-              <Text style={s.legendText}>
-                La punteada es la que la cámara no encontró: {missingNames}
-              </Text>
-            </View>
-          )}
-          {Object.keys(extra).length > 0 && (
-            <View style={s.legend}>
-              <Text style={s.legendText}>
-                Hay fichas de más en la foto. Deja sobre la mesa solo las 7 del Tangram.
-              </Text>
-            </View>
-          )}
+          <Text style={s.piecesMsg}>
+            {todasLasFichas
+              ? "Se usaron todas las fichas."
+              : hayDeMas
+                ? "Parece que hay fichas de más. Deja sobre la mesa solo las 7 del Tangram."
+                : "Revisa que hayas usado las 7 fichas."}
+          </Text>
         </Card>
 
         {/* Qué parte revisar: franjas de cobertura del backend. Señalar un
@@ -1211,14 +1182,8 @@ const s = StyleSheet.create({
   gapSm:     { marginTop: S.md },
   sectionHead:{ flexDirection: "row", alignItems: "center", gap: S.sm, marginBottom: 2 },
 
-  piecesHead:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-               marginBottom: S.md - 2 },
-  legend:    { flexDirection: "row", alignItems: "center", gap: S.sm, marginTop: 14,
-               paddingTop: 12 },
-  legendMark:{ width: 16, height: 16, borderWidth: 2,
-               borderColor: C.ink, borderStyle: "dashed" },
-  // Frases explicativas, no rótulos: para primaria no bajan de 14.
-  legendText:{ flex: 1, fontFamily: F.regular, fontSize: 14, lineHeight: 20, color: C.ink },
+  // Frase explicativa, no rótulo: para primaria no baja de 14.
+  piecesMsg: { fontFamily: F.bold, fontSize: 15, lineHeight: 21, color: C.ink },
 
   checksCard:{ padding: 16 },
   checkRow:  { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 7 },
