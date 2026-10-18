@@ -1,4 +1,4 @@
-import { candidatasApiUrl, getApiUrl, setApiUrl } from "./config";
+import { getApiUrl } from "./config";
 import {
   actualizarAcceso, cabeceraAuth, cerrarSesion, iniciarSesion,
   obtenerAcceso, obtenerRefresco, sesionExpirada,
@@ -14,10 +14,7 @@ export interface Pagina<T> {
 }
 
 /**
- * La URL del backend es dinámica: se configura desde la pantalla de ajustes
- * y se guarda en el teléfono (ver ./config.ts). En el celular "localhost"
- * apunta al propio celular, no a la PC, por eso hay que usar la IP de la PC
- * en la red WiFi (ej: http://192.168.1.105:8000).
+ * La URL del backend va fija en el APK (ver ./config.ts).
  */
 
 /**
@@ -31,32 +28,26 @@ const TIMEOUT_MS = 45_000;
  * Tope propio del ingreso, mucho más corto que el de las demás peticiones.
  *
  * Entrar es lo primero que se hace y es lo único que no puede quedarse colgado.
- * Con una IP enrutable pero equivocada —la de otra máquina de la misma red— el
- * paquete se descarta sin contestar y el socket espera el tiempo del sistema:
- * uno o dos minutos de spinner. Doce segundos sobran para un `POST /token` en
- * la red del aula, y quien se equivocó de dirección se entera a tiempo de
- * corregirla en Ajustes.
+ * Con una red que deja salir pero no llega —datos sin saldo, un wifi con portal
+ * de acceso— el socket espera el tiempo del sistema: uno o dos minutos de
+ * spinner. Doce segundos sobran para un `POST /token`.
  */
 const LOGIN_TIMEOUT_MS = 12_000;
 
 /**
  * Por debajo de este tiempo, el fallo volvió sin que hubiera nada que esperar.
  *
- * Es lo único que distingue «sin conexión» de «dirección equivocada» sin meter
- * NetInfo, que no está instalado: `fetch` dice «Network request failed» en los
- * dos casos. Con el WiFi apagado Android sabe que no hay ruta y falla al
- * instante; con WiFi y una IP que no contesta, el intento se queda esperando.
- * Un fallo instantáneo también lo produce el backend apagado —el sistema
- * responde que ahí no escucha nadie—, así que el mensaje nombra las dos causas
- * en vez de afirmar una: mandar a revisar lo que no es fue justo el problema.
+ * Es lo único que distingue «sin internet» de «el servidor no contesta» sin
+ * meter NetInfo, que no está instalado: `fetch` dice «Network request failed»
+ * en los dos casos. Sin datos ni WiFi Android sabe que no hay ruta y falla al
+ * instante; con red pero un servidor caído, el intento se queda esperando.
  */
 const FALLO_INMEDIATO_MS = 1200;
 
 /**
- * El teléfono no consiguió hablar con el servidor: ni WiFi, ni backend, ni la
- * dirección correcta. Es un tipo propio y no un `Error` cualquiera porque el
- * ingreso reacciona a él —busca el servidor en las otras direcciones conocidas
- * y reintenta— y no puede hacer eso con un «credenciales incorrectas».
+ * El teléfono no consiguió hablar con el servidor. Es un tipo propio y no un
+ * `Error` cualquiera para que la pantalla pueda distinguirlo de un
+ * «credenciales incorrectas».
  */
 export class ErrorDeRed extends Error {}
 
@@ -79,17 +70,15 @@ function errorDeRed(e: unknown, inicio: number): ErrorDeRed {
   if (e instanceof Error && e.name === "AbortError") {
     return new ErrorDeRed("El servidor tardó demasiado en responder. Inténtalo otra vez.");
   }
-  const url = getApiUrl();
   if (Date.now() - inicio < FALLO_INMEDIATO_MS) {
     return new ErrorDeRed(
-      `El teléfono no llegó ni a intentarlo con ${url}: el fallo volvió al ` +
-      `instante. Casi siempre es el WiFi apagado, o que el backend no esté ` +
-      `corriendo en esa dirección.`
+      "El teléfono no tiene internet. Revisa que el WiFi o los datos estén " +
+      "encendidos e inténtalo otra vez."
     );
   }
   return new ErrorDeRed(
-    `No se pudo conectar con el servidor (${url}). Revisa la dirección en ` +
-    `Ajustes, que estés en el mismo WiFi que la PC y que el backend esté corriendo.`
+    "No se pudo conectar con el servidor. Revisa tu internet e inténtalo otra " +
+    "vez en un momento."
   );
 }
 
@@ -230,9 +219,7 @@ async function pedirSinSesion<T>(path: string, init: RequestInit, fallo: string)
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
         throw new ErrorDeRed(
-          `El servidor (${getApiUrl()}) no contestó. Comprueba la dirección en ` +
-          `Ajustes: si apunta a una máquina que no es, el intento se queda ` +
-          `esperando una respuesta que no llega.`
+          "El servidor no contestó a tiempo. Revisa tu internet e inténtalo otra vez."
         );
       }
       throw errorDeRed(e, inicio);
@@ -555,24 +542,20 @@ export interface HealthStatus {
 }
 
 /**
- * Prueba la conexión contra una URL concreta (sin guardarla todavía).
- * Lo usa la pantalla de ajustes para validar antes de aceptar la dirección, y
- * también el sondeo de `buscarServidor`, que pide un tope más corto: ahí se
- * prueban varias direcciones a la vez y la mayoría no van a contestar.
+ * Pregunta al servidor cómo está. Lo usa la pantalla de ajustes para mostrar
+ * si la app puede trabajar (base de datos, análisis de fotos).
  */
-export async function testConnection(
-  url: string, timeoutMs = 6000,
-): Promise<HealthStatus> {
+export async function testConnection(timeoutMs = 8000): Promise<HealthStatus> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${url}/health`, { signal: controller.signal });
+    const res = await fetch(`${getApiUrl()}/health`, { signal: controller.signal });
     // Un 404 o un 500 significan que el servidor SÍ está ahí: ese diagnóstico
     // no puede acabar disfrazado de "no hay red", que es justo lo que esta
     // pantalla existe para distinguir.
     if (!res.ok) {
       throw new HealthError(
-        `El servidor respondió ${res.status}. ¿Es la dirección del backend de Tangram?`
+        `El servidor respondió ${res.status}. Inténtalo otra vez en un momento.`
       );
     }
     return await res.json();
@@ -581,98 +564,8 @@ export async function testConnection(
     if (e instanceof Error && e.name === "AbortError") {
       throw new Error("El servidor no respondió (tiempo agotado)");
     }
-    throw new Error("No se pudo conectar. Revisa la dirección, el wifi y el firewall.");
+    throw new Error("No se pudo conectar. Revisa tu internet.");
   } finally {
     clearTimeout(timer);
   }
-}
-
-// ─── Búsqueda automática del servidor ──────────────────────────────────────────
-/**
- * Tope para la dirección que ya se está usando.
- *
- * Es la apuesta buena: si el servidor está ahí contesta en milisegundos, y lo
- * único que se espera es descubrir que **no** está para pasar a buscar.
- */
-const SONDEO_ACTUAL_MS = 2500;
-
-/**
- * Tope del sondeo de las demás. Va más largo porque estas sí pueden ser
- * direcciones de otra red: una IP enrutable pero de una máquina que no está
- * descarta el paquete sin contestar, y el intento se queda esperando.
- */
-const SONDEO_MS = 4000;
-
-/** Lo que devuelve la búsqueda: dónde está el servidor y si hubo que mudarse. */
-export interface Hallazgo {
-  url:    string;
-  health: HealthStatus;
-  /** `true` si el servidor apareció en una dirección distinta a la que había. */
-  cambio: boolean;
-}
-
-/**
- * Lanza todos los sondeos a la vez y devuelve el primero que conteste.
- *
- * En paralelo y no en fila: en secuencia, con cuatro direcciones muertas
- * delante, encontrar la buena costaría cuatro esperas seguidas —dieciséis
- * segundos de arranque— cuando el aparato puede preguntarlo todo de golpe.
- * Devuelve `null` cuando ninguna contesta.
- */
-function primeraQueResponda(urls: string[]): Promise<Hallazgo | null> {
-  return new Promise(resolve => {
-    let pendientes = urls.length;
-    if (pendientes === 0) { resolve(null); return; }
-    let listo = false;
-    for (const url of urls) {
-      testConnection(url, SONDEO_MS)
-        .then(health => {
-          if (listo) return;
-          listo = true;
-          resolve({ url, health, cambio: true });
-        })
-        .catch(() => { /* esa dirección no era */ })
-        .then(() => {
-          pendientes -= 1;
-          if (pendientes === 0 && !listo) resolve(null);
-        });
-    }
-  });
-}
-
-/**
- * Averigua dónde está el backend y se queda con esa dirección.
- *
- * Es lo que hace que cambiar de red no pida nada: al arrancar la app se prueba
- * la dirección guardada y, si no contesta, se sondean todas las conocidas —las
- * horneadas en `app.json` y las que se hayan escrito a mano alguna vez, ver
- * `candidatasApiUrl`—. La que responda `/health` se guarda como la de ahora, y
- * el estudiante entra sin enterarse de que se mudó de aula.
- *
- * Solo cuenta como encontrado lo que responde `/health` **correctamente**: un
- * 404 en esa ruta significa que ahí hay otro servidor cualquiera, no este.
- *
- * Devuelve `null` si nadie contesta: entonces sí hay que escribir la dirección
- * a mano en Ajustes, y `null` es lo que le dice a la pantalla que lo pida.
- */
-export async function buscarServidor(): Promise<Hallazgo | null> {
-  const candidatas = candidatasApiUrl();
-  const actual = candidatas[0] ?? "";
-
-  if (actual !== "") {
-    try {
-      const health = await testConnection(actual, SONDEO_ACTUAL_MS);
-      // Se guarda aunque no haya cambiado nada: puede ser la de `app.json` en
-      // el primer arranque, y así queda también en el historial que se sondea.
-      await setApiUrl(actual);
-      return { url: actual, health, cambio: false };
-    } catch {
-      // no está ahí: se busca en las demás
-    }
-  }
-
-  const hallado = await primeraQueResponda(candidatas.slice(1));
-  if (!hallado) return null;
-  await setApiUrl(hallado.url);
-  return hallado;
 }

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tangram IA",
     "slug": "tangram-ia",
-    "version": "1.1.4",
+    "version": "1.1.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.usb.tangramia",
-      "versionCode": 6,
+      "versionCode": 7,
       "adaptiveIcon": {
         "backgroundColor": "#FCF6E8",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -35,10 +35,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.usb.tangramia",
       "infoPlist": {
-        "NSCameraUsageDescription": "La app usa la cámara para fotografiar tu figura de Tangram y validarla.",
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        }
+        "NSCameraUsageDescription": "La app usa la cámara para fotografiar tu figura de Tangram y validarla."
       }
     },
     "plugins": [
@@ -53,7 +50,7 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false
           }
         }
       ],
@@ -69,8 +66,7 @@
       "expo-font"
     ],
     "extra": {
-      "_comentario": "apiUrls son los atajos de servidor que la app ofrece en Ajustes, para no escribir la IP cada vez. Va vacía a propósito: una dirección solo sirve en la red donde se escribió, y publicarla describe esa red a cualquiera. Añade las tuyas así: { \"etiqueta\": \"Aula\", \"url\": \"http://192.168.1.3:8000\" }",
-      "apiUrls": []
+      "apiUrl": "https://tangram-ia.northcentralus.cloudapp.azure.com/api"
     }
   }
 }

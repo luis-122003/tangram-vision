@@ -11,11 +11,10 @@ El docente sigue usando la versión web (`../frontend`).
 
 ## Pantallas
 
-0. **Servidor** — atajos por red, búsqueda automática del backend y prueba de
-   conexión (la dirección también se puede escribir a mano)
-   (`/health`: base de datos, detector de fichas y umbral de aprobación). Con la
-   sesión abierta ofrece además **cambiar la clave**; desde el ingreso no, que es
-   donde no hay ninguna cuenta a la que cambiársela.
+0. **Ajustes** (engranaje del catálogo) — comprobar la conexión con el
+   servidor (`/health`: base de datos, detector de fichas y umbral de
+   aprobación), **cambiar la clave** y repetir el recorrido. La dirección del
+   servidor no se puede cambiar desde la app: va fija en el APK.
 1. **Ingreso** — el teléfono recuerda al último estudiante y solo le pide una
    clave de cuatro dígitos en un teclado propio de teclas grandes. Por debajo no
    cambia nada: la tarjeta guarda el correo y el PIN viaja como contraseña, así
@@ -144,58 +143,27 @@ helpers (`raised`, `inset`, `pressed`, `subtle`, `flat`) viven en
 
 ---
 
-## Paso 1 — Configurar la IP del backend
+## Paso 1 — La dirección del servidor
 
-En el teléfono, `localhost` es el propio teléfono, **no tu PC**. Hay que usar
-la IP de tu computador en la red WiFi. Averígualа en Windows con `ipconfig`
-(campo **Dirección IPv4** del adaptador Wi-Fi, algo como `192.168.1.10`).
-
-**Casi nunca hay que tocar nada, y nunca hay que recompilar.** La app se sabe
-de memoria las direcciones donde ya encontró el backend —las de `app.json` más
-las que se hayan escrito a mano alguna vez, guardadas en el teléfono— y **al
-arrancar las prueba todas**: usa la última que funcionó y, si esa no contesta,
-sondea las demás en paralelo y se queda con la que responda `/health`. Llegar al
-aula con la IP de casa guardada ya no pide nada: se abre la app y entra.
-
-Cuando hace falta intervenir, todo está en **Servidor** (abajo en la pantalla de
-ingreso, o el engranaje dentro de la app):
-
-- **Mis redes** — un toque en «Universidad», «Casa» o cualquier dirección
-  guardada: la pone y la prueba de una vez. Es lo que se usa si se cambió de red
-  con la app ya abierta.
-- **Buscar el servidor en la red** — repite el sondeo del arranque a mano.
-- **Escribirla a mano** — solo cuando la IP es nueva. Al guardarla queda en
-  «Mis redes» y la app la volverá a probar sola de ahí en adelante, sin
-  recompilar.
-
-Las direcciones horneadas en el APK están en `app.json`, y es el único sitio del
-proyecto donde aparece una IP:
+La app habla siempre con el servidor desplegado
+(`https://tangram-ia.northcentralus.cloudapp.azure.com/api`, ver
+`../DESPLIEGUE.md`). La dirección va **fija dentro del APK**, en `app.json`:
 
 ```json
 "extra": {
-  "apiUrls": [
-    { "etiqueta": "Aula",  "url": "http://192.168.1.10:8000" },
-    { "etiqueta": "Casa",  "url": "http://192.168.0.20:8000" }
-  ]
+  "apiUrl": "https://tangram-ia.northcentralus.cloudapp.azure.com/api"
 }
 ```
 
-**Viene vacía a propósito.** Una IP solo sirve en la red donde se escribió, y
-este repositorio es público: publicar las direcciones de un aula concreta no
-ayuda a nadie de fuera y describe esa red a cualquiera. Pon las tuyas antes de
-generar el APK.
+No hay nada que configurar en el teléfono y funciona desde cualquier red. Para
+apuntar a otro servidor se cambia ese valor y se genera un APK nuevo.
 
-Añadir una red al APK es añadir una entrada a esa lista; nada más en el código
-depende de ella. Las direcciones se limpian al leerlas (espacios de más, barra
-final, `http://` ausente), así que un `"http:// 192.168.1.10:8000"` mal
-teclado no rompe la app.
+> **Desarrollo contra un backend local.** Cambia temporalmente `apiUrl` por
+> `http://TU_IP:8000` (la IPv4 del WiFi, con `ipconfig`) y pon
+> `usesCleartextTraffic: true` en el plugin `expo-build-properties`: el APK de
+> producción solo habla HTTPS. No subas ese cambio.
 
-> Esto es clave el día de la sustentación: si la red de la universidad bloquea
-> la comunicación entre dispositivos, conecta el portátil al **hotspot del
-> celular**, saca la IP nueva con `ipconfig` y escríbela en Ajustes; queda
-> guardada y a partir de ahí la app la reconoce sola.
-
-## Paso 2 — Arrancar los servicios escuchando en la red
+## Paso 2 — (Solo desarrollo local) Arrancar los servicios en la red
 
 Son dos procesos. El servicio de visión puede quedarse en local (solo lo llama
 el backend), pero el backend sí tiene que aceptar conexiones desde el teléfono:
@@ -285,16 +253,9 @@ El perfil `preview` genera APK directo. Créalo en `eas.json` si no existe:
 ## Notas
 
 - **Cámara**: la app usa `expo-camera` con permiso nativo, así que no tiene la
-  restricción de HTTPS que sí afecta a los navegadores. Funciona con HTTP
-  en red local (`usesCleartextTraffic` está habilitado en `app.json`).
-- **Si cambias de red WiFi** cambia la IP de tu PC, pero no hay que recompilar
-  ni normalmente tocar nada: la app sondea al arrancar las direcciones que
-  conoce y adopta la que conteste (`buscarServidor` en `src/api/client.ts`, y la
-  lista en `src/api/config.ts`). Si el ingreso falla por red, vuelve a buscar y
-  reintenta una vez antes de dar el error.
-- **HTTP en claro**: Android 9+ bloquea el tráfico sin cifrar por defecto. El
-  plugin `expo-build-properties` lo habilita (`usesCleartextTraffic`), que es
-  lo que permite hablar con el backend por `http://` en la red local.
+  restricción de HTTPS que sí afecta a los navegadores.
+- **Solo HTTPS**: el servidor tiene certificado (Caddy + Let's Encrypt), así que
+  `usesCleartextTraffic` está en `false` y Android rechaza cualquier `http://`.
 - **Permisos**: la app solo pide cámara e internet (y vibración, que Android no
   considera peligroso). Los demás que Expo agrega por defecto (micrófono,
   almacenamiento) están bloqueados en `app.json`. Si el estudiante deniega la

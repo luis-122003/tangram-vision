@@ -176,10 +176,10 @@ docente desde su panel, o se registran ellos desde la app con su correo.
 
 ## 8. La app móvil
 
-En **Ajustes** de la app, escribe `https://tu-dominio.me/api`. Funciona desde
-cualquier red, sin estar en la misma WiFi que el servidor. Para que el APK la
-traiga ya puesta, añádela a `expo.extra.apiUrls` de `mobile/app.json` y vuelve
-a generarlo (`mobile/README.md`).
+La dirección va fija dentro del APK: `expo.extra.apiUrl` de `mobile/app.json`
+(`https://tu-dominio/api`). La app no deja cambiarla. Si el dominio cambia,
+actualiza ese valor y vuelve a generar el APK (`mobile/README.md`). Funciona
+desde cualquier red.
 
 ## Operación
 

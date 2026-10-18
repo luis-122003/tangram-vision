@@ -23,8 +23,8 @@ let refresco: string | null = null;
 let alExpirar: (() => void) | null = null;
 
 /**
- * Recupera la sesión guardada. Se llama una vez al arrancar la app, junto con
- * `loadApiUrl`, antes de decidir si se muestra el login.
+ * Recupera la sesión guardada. Se llama una vez al arrancar la app,
+ * antes de decidir si se muestra el login.
  */
 export async function restaurarSesion(): Promise<User | null> {
   try {

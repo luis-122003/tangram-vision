@@ -7,10 +7,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Crypto from "expo-crypto";
 import Svg, { Polygon, Rect } from "react-native-svg";
 import {
-  buscarServidor, changePassword, CorreoSinVerificar, ErrorDeRed, login, logout, olvideClave,
+  changePassword, CorreoSinVerificar, login, logout, olvideClave,
   reenviarCodigo, registrar, restablecerClave, verificarCorreo,
 } from "../api/client";
-import { useApiUrl } from "../api/config";
 import type { User } from "../api/types";
 import Icon from "../components/Icon";
 import { Card, Eyebrow, PrimaryButton } from "../components/ui";
@@ -83,7 +82,7 @@ const esCodigo = (c: string) => /^\d{6}$/.test(c);
 /** Tiene pinta de correo. El servidor es quien lo valida de verdad. */
 const correoValido = (c: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.trim());
 
-export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }: {
+export default function LoginScreen({ onLogin, onOpenMaterials }: {
   /**
    * Entró. Se devuelve también **la clave que tecleó**, y no por capricho: si
    * la cuenta viene con la clave temporal del docente, la raíz de la app lleva
@@ -95,7 +94,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
    * completa el cambio, y se borra con él.
    */
   onLogin: (u: User, clave: string) => void;
-  onOpenSettings: () => void; onOpenMaterials: () => void;
+  onOpenMaterials: () => void;
 }) {
   const { width } = useWindowDimensions();
 
@@ -133,12 +132,6 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   const [aviso,      setAviso]      = useState("");
   /** Segundos que faltan para poder pedir otro código. */
   const [espera,     setEspera]     = useState(0);
-  /** Se está sondeando la red buscando el servidor (ver `entrar`). */
-  const [buscando,   setBuscando]   = useState(false);
-  // La dirección se dibuja desde el hook y no leyéndola una vez: la búsqueda
-  // automática puede reemplazarla mientras esta pantalla está abierta, y aquí
-  // hay que decir a dónde se va a conectar de verdad.
-  const apiUrl = useApiUrl();
 
   useEffect(() => {
     AsyncStorage.getItem(LAST_STUDENT)
@@ -217,36 +210,6 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     }
   }
 
-  /**
-   * Lanza una petición que abre sesión, mudándose de red si hace falta.
-   *
-   * Si falla **por red** —y solo por red: un PIN equivocado no cuenta— se
-   * sondean las otras direcciones conocidas y, si el servidor aparece en una de
-   * ellas, se reintenta una sola vez. Es el caso de siempre: el teléfono se
-   * quedó con la dirección del aula de ayer, o con la de casa. Así la app se
-   * muda de red por su cuenta en vez de mandar a un niño a Ajustes a teclear
-   * una IP.
-   *
-   * Lo comparten entrar y registrarse: una cuenta nueva se crea en el mismo
-   * aula, con el mismo teléfono y la misma dirección guardada de ayer.
-   */
-  async function conReintentoDeRed<T>(peticion: () => Promise<T>): Promise<T> {
-    try {
-      return await peticion();
-    } catch (e) {
-      if (!(e instanceof ErrorDeRed)) throw e;
-      setError("");
-      setBuscando(true);
-      const hallado = await buscarServidor().catch(() => null);
-      setBuscando(false);
-      // Solo se reintenta si el servidor está en otra dirección. Si contestó
-      // en la que ya había, el fallo no era la dirección y repetir el intento
-      // solo daría el mismo error dos veces.
-      if (hallado?.cambio) return peticion();
-      throw e;
-    }
-  }
-
   /** El teléfono se queda con quién entró, para no pedir el correo mañana. */
   async function recordar(usuario: User, correo: string): Promise<void> {
     await AsyncStorage.setItem(LAST_STUDENT, JSON.stringify({ name: usuario.name, email: correo }))
@@ -256,15 +219,15 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   /**
    * Un intento de ingreso.
    *
-   * La clave se pasa por parámetro porque el reintento la necesita intacta: el
-   * estado se limpia al mostrar el error.
+   * La clave se pasa por parámetro porque el estado se limpia al mostrar el
+   * error, y el paso de verificación del correo la necesita intacta.
    */
   async function entrar(clave: string): Promise<void> {
     const clean = email.trim();
     // `login` guarda el token de sesión y devuelve ya el usuario.
     let usuario: User;
     try {
-      usuario = await conReintentoDeRed(() => login(clean, clave));
+      usuario = await login(clean, clave);
     } catch (e) {
       // Clave buena, correo sin confirmar: no es un error, es el paso que falta.
       // Se deja pedir otro código al momento: el último pudo llegar hace días.
@@ -298,7 +261,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     const nombre = nombreNuevo.trim();
     const correo = correoNuevo.trim().toLowerCase();
     const clave = claveTemporal();
-    await conReintentoDeRed(() => registrar(nombre, correo, clave));
+    await registrar(nombre, correo, clave);
     pedirCodigo(
       correo, clave, true,
       `Te enviamos un código de 6 números a ${correo}. Escríbelo aquí.`, true,
@@ -316,7 +279,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   async function confirmarCodigo(): Promise<void> {
     if (!pendiente) return;
     const { correo, clave, temporal } = pendiente;
-    const usuario = await conReintentoDeRed(() => verificarCorreo(correo, clave, codigo.trim()));
+    const usuario = await verificarCorreo(correo, clave, codigo.trim());
     if (temporal) {
       cambiarModo("clave");
       setAviso("¡Correo confirmado! Ahora elige tu clave: cuatro números.");
@@ -344,7 +307,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
     setEmail(correo);
     let usuario: User;
     try {
-      usuario = await conReintentoDeRed(() => login(correo, nueva));
+      usuario = await login(correo, nueva);
     } catch (e) {
       // La cuenta ya está lista; lo que falló es solo entrar. Se deja en el
       // ingreso con su correo puesto, y el error se ve allí.
@@ -365,7 +328,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
 
   async function pedirRecuperacion(): Promise<void> {
     const correo = correoOlvido.trim().toLowerCase();
-    await conReintentoDeRed(() => olvideClave(correo));
+    await olvideClave(correo);
     cambiarModo("restablecer");
     setCorreoOlvido(correo);
     setAviso(
@@ -378,7 +341,7 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
   /** Cambia la clave y vuelve al ingreso para entrar con ella. */
   async function cambiarClaveOlvidada(): Promise<void> {
     const correo = correoOlvido.trim().toLowerCase();
-    await conReintentoDeRed(() => restablecerClave(correo, codigo.trim(), pin));
+    await restablecerClave(correo, codigo.trim(), pin);
     setEmail(correo);
     // Si el teléfono recordaba a otro estudiante, se entra con este correo.
     if (account?.email !== correo) setEditing(true);
@@ -640,20 +603,6 @@ export default function LoginScreen({ onLogin, onOpenSettings, onOpenMaterials }
           </Pressable>
         )}
 
-        {/* Ajustes del servidor: discretos pero alcanzables */}
-        <Pressable
-          onPress={onOpenSettings} style={s.server}
-          accessibilityRole="button" accessibilityLabel="Cambiar la dirección del servidor"
-        >
-          <Icon name="gear" size={17} color={C.muted} />
-          <Text style={[s.serverText, tabular]} numberOfLines={1}>
-            {buscando
-              ? "Buscando el servidor en la red…"
-              : `Servidor ${apiUrl.replace(/^https?:\/\//, "")}`}
-          </Text>
-          <Text style={labelType(12, C.ink)}>Cambiar</Text>
-        </Pressable>
-
         {/* Alcanzable **sin cuenta**: es lo que mira el docente para saber qué
             repartir, antes de que ningún niño tenga el teléfono en la mano. */}
         <Pressable
@@ -703,19 +652,15 @@ const s = StyleSheet.create({
   errorBox:  { marginTop: 12, paddingVertical: 10, paddingHorizontal: 14 },
   error:     { fontFamily: F.bold, fontSize: 14, color: C.ink, textAlign: "center" },
 
-  // Mismo trazo que las filas de abajo (servidor, materiales): una pregunta a
+  // Mismo trazo que la fila de abajo (materiales): una pregunta a
   // la izquierda y la acción a la derecha, sin placa, para no competir con el
   // teclado que tiene encima.
   alternar:      { flexDirection: "row", alignItems: "center", gap: S.sm,
                    justifyContent: "center", paddingVertical: 4, minHeight: TAP.min },
   alternarTexto: { fontFamily: F.regular, fontSize: 13, color: C.ink },
 
-  server:    { marginTop: "auto", flexDirection: "row", alignItems: "center", gap: S.sm,
-               paddingTop: 16, paddingBottom: 8, minHeight: TAP.min },
-  serverText:{ flex: 1, fontFamily: F.regular, fontSize: 12, color: C.muted },
-
-  materiales:     { flexDirection: "row", alignItems: "center", gap: S.sm,
-                    paddingTop: 4, paddingBottom: 12, minHeight: TAP.min },
+  materiales:     { marginTop: "auto", flexDirection: "row", alignItems: "center", gap: S.sm,
+                    paddingTop: 16, paddingBottom: 12, minHeight: TAP.min },
   materialesTexto:{ fontFamily: F.regular, fontSize: 12, color: C.ink },
   flexText:       { flex: 1 },
 });

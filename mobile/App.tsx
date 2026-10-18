@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BackHandler, StatusBar, StyleSheet, ActivityIndicator, Text, View } from "react-native";
+import { BackHandler, StatusBar, StyleSheet, ActivityIndicator, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFonts } from "expo-font";
 // Se importa cada peso por su subruta y no desde la raíz del paquete: Metro no
@@ -19,8 +19,7 @@ import HistoryScreen from "./src/screens/HistoryScreen";
 import MaterialsScreen from "./src/screens/MaterialsScreen";
 import TourScreen from "./src/screens/TourScreen";
 import ErrorBoundary from "./src/components/ErrorBoundary";
-import { loadApiUrl } from "./src/api/config";
-import { buscarServidor, logout as apiLogout } from "./src/api/client";
+import { logout as apiLogout } from "./src/api/client";
 import { alExpirarLaSesion, restaurarSesion } from "./src/api/session";
 import { siguienteFigura } from "./src/api/orden";
 import type { Figure, User } from "./src/api/types";
@@ -33,7 +32,7 @@ import type { Figure, User } from "./src/api/types";
  * que entra no llegue a ver nunca la explicación porque el primero ya la pasó.
  */
 const TOUR_VISTO = (userId: number) => `tangram.tour.v1.${userId}`;
-import { C, F } from "./src/theme";
+import { C } from "./src/theme";
 
 /**
  * App móvil de Tangram IA (versión estudiante).
@@ -97,12 +96,6 @@ function Aplicacion() {
    */
   const [figuras, setFiguras] = useState<Figure[]>([]);
   /**
-   * La app está sondeando la red para encontrar el backend. Se dice en el
-   * arranque porque es la única espera del inicio que puede durar unos
-   * segundos, y un spinner mudo tanto tiempo se lee como app colgada.
-   */
-  const [buscando,   setBuscando]   = useState(false);
-  /**
    * Vueltas al catálogo. Sube cada vez que se sale de una figura, y es lo único
    * que el catálogo necesita para volver a pedir sus datos: como ya no se
    * desmonta (ver el render), sin esta señal se quedaría mostrando las
@@ -121,24 +114,12 @@ function Aplicacion() {
     ArchivoBlack_400Regular,
   });
 
-  // La dirección del servidor y la sesión del estudiante se guardan en el
-  // teléfono, así que se leen antes de mostrar nada: si la sesión sigue viva no
-  // hay que volver a pedir la clave.
-  //
-  // Con la dirección ya cargada se busca el servidor antes de dibujar nada:
-  // `buscarServidor` prueba la guardada y, si no contesta, sondea las demás
-  // direcciones conocidas y adopta la que responda. Es lo que hace que llegar
-  // al aula no pida tocar la IP en Ajustes. La espera va aquí, en el arranque,
-  // y no en segundo plano a propósito: entrando con la dirección equivocada, el
-  // catálogo de una sesión ya guardada dispararía sus tres peticiones contra el
-  // vacío y el niño vería errores antes de que la búsqueda terminara.
+  // La sesión del estudiante se guarda en el teléfono, así que se lee antes de
+  // mostrar nada: si sigue viva no hay que volver a pedir la clave.
   useEffect(() => {
     let vivo = true;
     (async () => {
-      const [, guardado] = await Promise.all([loadApiUrl(), restaurarSesion()]);
-      if (vivo) setBuscando(true);
-      await buscarServidor().catch(() => null);
-      if (vivo) setBuscando(false);
+      const guardado = await restaurarSesion();
       if (!guardado) return;
       // El mismo filtro que el ingreso: esta app es solo para estudiantes, y
       // al docente el servidor le rechaza los intentos con un 403. Aquí hace
@@ -161,6 +142,7 @@ function Aplicacion() {
       setActiveFig(null);
       setInPin(false);
       setInHistory(false);
+      setInSettings(false);
       // El recorrido también: no se dibuja sin sesión, así que quedaría abierto
       // e invisible hasta el siguiente ingreso, y el siguiente en entrar —en un
       // teléfono compartido, otro niño— se lo comería entero aunque ya lo
@@ -219,6 +201,7 @@ function Aplicacion() {
     setActiveFig(null);
     setInPin(false);
     setInHistory(false);
+    setInSettings(false);
     setInTour(false);
     setTourDesdeAjustes(false);
     setClaveDeIngreso(null);
@@ -308,18 +291,14 @@ function Aplicacion() {
       {booting ? (
         <View style={s.center}>
           <ActivityIndicator size="large" color={C.ink} />
-          {buscando && <Text style={s.buscando}>Buscando el servidor…</Text>}
         </View>
       ) : !user ? (
         inMaterials
           ? <MaterialsScreen onClose={() => setInMaterials(false)} />
-          : inSettings
-            ? <SettingsScreen onClose={() => setInSettings(false)} />
-            : <LoginScreen
-                onLogin={handleLogin}
-                onOpenSettings={() => setInSettings(true)}
-                onOpenMaterials={() => setInMaterials(true)}
-              />
+          : <LoginScreen
+              onLogin={handleLogin}
+              onOpenMaterials={() => setInMaterials(true)}
+            />
       ) : user.must_change_password ? (
         /**
          * Activación del perfil. La cuenta entró con la clave temporal que le
@@ -451,7 +430,6 @@ export default function App() {
 const s = StyleSheet.create({
   root:   { flex: 1, backgroundColor: C.paper },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
-  buscando: { fontFamily: F.regular, fontSize: 13, color: C.muted },
   fill:   { flex: 1 },
   oculto: { display: "none" },
   // Lo que se abre encima tapa la pantalla entera y es opaco: el catálogo sigue

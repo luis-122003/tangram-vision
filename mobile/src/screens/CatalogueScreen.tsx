@@ -119,7 +119,7 @@ export default function CatalogueScreen({
         {/* Los materiales se consultan mientras se elige figura, que es cuando
             el estudiante decide si va a la mesa o se queda donde está. */}
         <IconButton name="kit" onPress={onOpenMaterials} label="Qué materiales necesito" />
-        <IconButton name="gear" onPress={onOpenSettings} label="Ajustes del servidor" />
+        <IconButton name="gear" onPress={onOpenSettings} label="Ajustes" />
         <IconButton name="logout" onPress={onLogout} label="Salir de mi cuenta" />
       </View>
 
