@@ -394,13 +394,15 @@ cp .env.example .env
 npm run dev
 ```
 Al arrancar crea la base de datos, las tablas `users` / `sessions` / `figures`
-y siembra el catálogo de figuras y dos usuarios demo:
-- Estudiante: `estudiante@tangram.edu` / `1234`
-- Docente: `docente@tangram.edu` / `1234`
+y siembra el catálogo de figuras y dos cuentas de arranque:
+- Estudiante: `estudiante@tangram.edu`
+- Docente: `docente@tangram.edu`
 
-Esas dos cuentas se siembran **solo fuera de producción**, y su clave se puede
-cambiar desde la propia aplicación (`POST /password`), que además cierra las
-sesiones abiertas en los demás dispositivos.
+Nacen con la clave escrita en `backend/src/db/schema.ts` (`USUARIOS_DEMO`), y
+se siembran **solo fuera de producción**. La pantalla de login ya no las anuncia,
+así que cámbiales la clave antes de enseñar el sistema a nadie: desde la propia
+aplicación (`POST /password`), que además cierra las sesiones abiertas en los
+demás dispositivos.
 
 Backend: http://localhost:8000 · Estado: http://localhost:8000/health
 

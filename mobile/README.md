@@ -270,8 +270,10 @@ El perfil `preview` genera APK directo. Créalo en `eas.json` si no existe:
   (960). A 2000 px el recorte sigue rondando los 1000 y el detector reduce; con
   1280 se quedaría en ~630 y tendría que **ampliar**, que es justo lo que este
   proyecto se dedicó a evitar. No bajarla sin rehacer las cuentas.
-- **Usuario de prueba**: `estudiante@tangram.edu` / `1234`. Cámbiala desde
-  Ajustes → Mi clave antes de usar la app con estudiantes de verdad.
+- **Usuario de prueba**: `estudiante@tangram.edu`. Su clave es la que fija la
+  semilla del backend (`USUARIOS_DEMO` en `backend/src/db/schema.ts`) o la que le
+  hayas puesto después; cámbiala desde Ajustes → Mi clave antes de usar la app
+  con estudiantes de verdad.
 
 ## Lo que falta para publicarla
 

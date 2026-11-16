@@ -228,17 +228,6 @@ export default function LoginScreen(
         <div style={{ textAlign: "center", marginTop: 14 }}>
           <MaterialsButton variant="link" />
         </div>
-
-        <div style={{
-          marginTop: 24, padding: "15px 17px", fontSize: 12,
-          color: BRUT.ink, lineHeight: 1.7, ...BRUT.inset(),
-        }}>
-          <strong style={{ ...T.eyebrow(BRUT.ink), display: "block", marginBottom: 4 }}>
-            Demo
-          </strong>
-          Estudiante: estudiante@tangram.edu / 1234<br/>
-          Docente: docente@tangram.edu / 1234
-        </div>
       </div>
     </div>
   );

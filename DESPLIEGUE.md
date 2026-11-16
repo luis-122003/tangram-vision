@@ -17,6 +17,13 @@ Internet ──443──▶ caddy ──┬── /       → web estática
 Son cuatro contenedores (`docker-compose.yml`). Caddy pide y renueva solo el
 certificado de Let's Encrypt.
 
+**Dónde está hoy.** El sistema corre en una máquina virtual de Azure, en
+`tangram-ia.northcentralus.cloudapp.azure.com`. Los capítulos 1 a 5 describen el
+montaje en DigitalOcean, que fue donde se levantó la primera vez; el servidor de
+Azure es el mismo `docker-compose.yml` sobre Ubuntu con Docker, así que todo lo
+que viene después del paso 4 vale igual. Para **actualizar** lo que ya está
+corriendo, salta a «Actualizar producción».
+
 ---
 
 ## 1. Cuentas (una sola vez)
@@ -181,11 +188,84 @@ La dirección va fija dentro del APK: `expo.extra.apiUrl` de `mobile/app.json`
 actualiza ese valor y vuelve a generar el APK (`mobile/README.md`). Funciona
 desde cualquier red.
 
+## Actualizar producción
+
+Una actualización es siempre lo mismo: subir el cambio a GitHub desde el PC y
+traerlo en el servidor. El servidor **no** sube nada ni edita archivos a mano.
+
+**En tu PC**, con el cambio ya probado:
+
+```powershell
+git add -A ; git commit -m "Qué cambió" ; git push
+```
+
+**En el servidor**, por SSH:
+
+```bash
+ssh <usuario>@tangram-ia.northcentralus.cloudapp.azure.com
+cd ~/tangram-ia
+bash deploy/actualizar.sh
+```
+
+El script hace, en este orden y parándose si algo falla:
+
+1. **Copia de la base** en `respaldos/respaldo-<fecha>.sql`. Va primero porque
+   el backend aplica al arrancar los cambios de esquema que traiga la versión
+   nueva, y eso no tiene marcha atrás. Con `--sin-copia` se salta.
+2. **Trae el código** (`git merge --ff-only`). Si alguien editó archivos en el
+   servidor, se detiene y los enseña en vez de pisarlos.
+3. **Reconstruye las imágenes.** Hace falta incluso para un cambio de una línea
+   en la web: la dirección de la API va *dentro* del paquete del frontend
+   (`VITE_API_URL`), así que reiniciar el contenedor no bastaría.
+4. **Espera** a que los cuatro contenedores queden en marcha.
+5. **Comprueba `/api/health`** por el dominio real, resolviéndolo a la propia
+   máquina para que el certificado cuadre, y avisa si `db_connected`,
+   `yolo_loaded` o `storage_connected` vienen en `false`.
+
+Si la comprobación final falla, imprime los últimos registros del backend y la
+orden para volver al commit anterior. No vuelve atrás solo, a propósito: una
+reconstrucción tarda varios minutos y no conviene que arranque sin nadie
+delante.
+
+| Caso | Orden |
+|---|---|
+| Actualización normal | `bash deploy/actualizar.sh` |
+| Reconstruir sin que haya código nuevo | `bash deploy/actualizar.sh --forzar` |
+| Si acabas de copiar la base a mano | `bash deploy/actualizar.sh --sin-copia` |
+
+**Lo que una actualización no toca**, y hay que hacer aparte si cambió: `.env`,
+`deploy/backend.env` y `deploy/vision.env` (no se versionan), los pesos del
+detector en `vision-service/models/` (no van en git) y la dirección dentro del
+APK (`mobile/app.json`, ver el paso 8).
+
+### Las cuentas, desde el servidor
+
+En producción no se siembra ninguna cuenta, y el correo y el nombre están
+cifrados: un `SELECT` a la tabla `users` solo devuelve bytes. Por eso estas
+cuatro órdenes, que usan las mismas funciones que el backend:
+
+```bash
+docker compose exec backend node scripts/listar-cuentas.mjs
+docker compose exec backend node scripts/crear-docente.mjs    <correo> "<nombre>"
+docker compose exec backend node scripts/crear-estudiante.mjs <correo> "<nombre>"
+docker compose exec backend node scripts/cambiar-clave.mjs    <correo>
+```
+
+Las tres últimas piden la clave por la terminal y no la muestran: un argumento
+quedaría en el historial del shell y en la lista de procesos. Exigen lo mismo
+que la aplicación —12 caracteres al docente, 4 al estudiante, y nada de `1234`
+ni `0000`— y `cambiar-clave` además cierra las sesiones que esa cuenta tuviera
+abiertas, que es la mitad que importa cuando se recupera una cuenta.
+
+Llegan al servidor con el `git pull` del propio script; no hay que copiarlas.
+
+---
+
 ## Operación
 
 | Qué | Cómo |
 |---|---|
-| Actualizar el código | `git pull && docker compose up -d --build` |
+| Actualizar el código | `bash deploy/actualizar.sh` (ver «Actualizar producción») |
 | Ver los registros | `docker compose logs -f backend` (o `vision`, `caddy`) |
 | Reiniciar todo | `docker compose restart` |
 | Copia de la base | `docker compose exec mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" tangram_ia' > respaldo-$(date +%F).sql` |
@@ -199,4 +279,7 @@ después, hay que cambiarla también dentro de MySQL:
 `ALTER USER 'tangram_app'@'%' IDENTIFIED BY '…';`
 
 **Nunca** pongas `NODE_ENV=development` en el servidor: siembra las cuentas
-`docente@tangram.edu` y `estudiante@tangram.edu` con clave `1234`.
+`docente@tangram.edu` y `estudiante@tangram.edu` con la clave escrita en
+`backend/src/db/schema.ts`, que está en el repositorio y la conoce cualquiera.
+En producción no se siembra nada: el primer docente se da de alta con
+`node scripts/crear-docente.mjs <correo> "<nombre>"`.

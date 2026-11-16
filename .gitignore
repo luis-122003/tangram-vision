@@ -68,3 +68,12 @@ tangram_sintetico.zip
 # ─── Despliegue con Docker ──────────────────────────────────────────────────
 # La configuración real del servidor; las plantillas (*.env.example) sí van.
 deploy/*.env
+
+# Claves de las cuentas de acceso generadas en local. Nunca se versionan.
+credenciales-acceso.txt
+
+# Copias de la base que deja deploy/actualizar.sh en el servidor. Llevan los
+# datos de los estudiantes (cifrados, pero son suyos): nunca van al repositorio.
+respaldos/
+*.sql
+!backend/sql/*.sql
