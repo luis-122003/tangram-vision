@@ -230,8 +230,17 @@ delante.
 | Caso | Orden |
 |---|---|
 | Actualización normal | `bash deploy/actualizar.sh` |
+| Cambio que no toca el detector | `bash deploy/actualizar.sh --solo "caddy backend"` |
 | Reconstruir sin que haya código nuevo | `bash deploy/actualizar.sh --forzar` |
 | Si acabas de copiar la base a mano | `bash deploy/actualizar.sh --sin-copia` |
+
+**Sobre `--solo`.** La imagen del servicio de visión arrastra torch y
+ultralytics: reconstruirla son varios minutos con la CPU al tope, y en una
+máquina pequeña deja al resto sin aire mientras dura. Un cambio que no toca
+`vision-service/` no tiene por qué pagar eso. La web vive dentro de la imagen de
+`caddy` y los scripts de `backend/scripts/` dentro de la de `backend`, así que
+para casi todo lo demás basta `--solo "caddy backend"`. Si dudas, no la uses:
+reconstruirlo todo siempre es lo correcto, solo que más lento.
 
 **Lo que una actualización no toca**, y hay que hacer aparte si cambió: `.env`,
 `deploy/backend.env` y `deploy/vision.env` (no se versionan), los pesos del

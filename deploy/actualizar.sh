@@ -21,17 +21,35 @@
 #   --sin-copia    salta la copia de la base (más rápido; úsalo solo si acabas
 #                  de hacer una a mano)
 #   --forzar       reconstruye aunque GitHub no traiga nada nuevo
+#   --solo "a b"   reconstruye solo esos servicios y levanta el resto como esté
+#
+# `--solo` existe por el servicio de visión: su imagen arrastra torch y
+# ultralytics, y reconstruirla son varios minutos de CPU al tope. Un cambio que
+# no lo toca no tiene por qué pagarlo. Para algo que solo cambia la web:
+#
+#   bash deploy/actualizar.sh --solo "caddy backend"
+#
+# (la web vive dentro de la imagen de caddy; el backend lleva los scripts de
+# scripts/ y su imagen se reconstruye en menos de un minuto). Si dudas, no uses
+# la opción: reconstruirlo todo siempre es lo correcto, solo que más lento.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SIN_COPIA=0
 FORZAR=0
-for arg in "$@"; do
-  case "$arg" in
+SERVICIOS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --sin-copia) SIN_COPIA=1 ;;
     --forzar)    FORZAR=1 ;;
-    *) echo "Opción desconocida: $arg (usa --sin-copia o --forzar)"; exit 1 ;;
+    --solo)
+      shift
+      [ $# -gt 0 ] || { echo "--solo necesita los servicios: --solo \"caddy backend\""; exit 1; }
+      SERVICIOS="$1"
+      ;;
+    *) echo "Opción desconocida: $1 (usa --sin-copia, --forzar o --solo)"; exit 1 ;;
   esac
+  shift
 done
 
 # `docker compose` (v2, el plugin) y `docker-compose` (v1) conviven según cómo
@@ -107,8 +125,14 @@ echo
 # ── 3. Reconstruir ───────────────────────────────────────────────────────────
 # La web lleva dentro la dirección de la API (VITE_API_URL), así que un cambio
 # del frontend solo llega reconstruyendo la imagen de caddy; no basta reiniciar.
-echo "[3/5] Reconstruyendo las imágenes (puede tardar varios minutos) …"
-$DC up -d --build
+if [ -n "$SERVICIOS" ]; then
+  echo "[3/5] Reconstruyendo solo: $SERVICIOS (el resto se levanta como esté) …"
+else
+  echo "[3/5] Reconstruyendo las imágenes (puede tardar varios minutos) …"
+fi
+# Sin comillas a propósito: $SERVICIOS son varias palabras, y vacío no añade nada.
+# shellcheck disable=SC2086
+$DC up -d --build $SERVICIOS
 echo
 
 # ── 4. Esperar a que levanten ────────────────────────────────────────────────
