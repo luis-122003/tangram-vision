@@ -1,11 +1,18 @@
 /**
- * password.routes.ts — cambio y recuperación de la contraseña propia.
+ * password.routes.ts — cambio de la contraseña propia.
  *
- * Existe porque sin esto todo lo demás se cae solo: las cuentas se siembran con
- * la clave `1234` y hasta ahora no había ninguna forma de cambiarla desde la
- * aplicación. Se puede cifrar el correo, firmar los tokens y limitar los
- * intentos, que si la clave del docente sigue siendo la de la demostración el
- * resto del trabajo de autenticación no protege nada.
+ * Una sola ruta: `POST /password`, que exige la clave actual. **No hay
+ * recuperación por correo**, y eso es una decisión, no una carencia: un endpoint
+ * que cambia la clave de una cuenta sabiendo solo su dirección es la puerta más
+ * ancha del sistema, y aquí no compensa tenerla. Las cuentas de este servidor
+ * son pocas y conocidas; el coste de perder una clave es que alguien entre al
+ * servidor y la reponga, no que un curso entero se quede fuera.
+ *
+ * Las tres formas que quedan de cambiar una clave, y ninguna necesita correo:
+ *   - Su dueño, aquí, sabiendo la actual (web y app).
+ *   - El docente, para un estudiante, desde su panel
+ *     (`POST /students/:id/password/reset`): le regenera una temporal.
+ *   - Quien administra el servidor, con `scripts/cambiar-clave.mjs`.
  *
  * Va en su propio archivo y no en `auth.routes.ts` porque aquello son las tres
  * rutas del ciclo del token —entrar, refrescar, salir—, y esto es una operación
@@ -14,19 +21,10 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { buscarPorEmail, buscarPorId, cambiarClave, revocarSesiones } from "../db/users.js";
+import { buscarPorId, cambiarClave, revocarSesiones } from "../db/users.js";
 import { exigirSesion } from "../auth/middleware.js";
 import { HttpError, noAutorizado } from "../http/errors.js";
-import { limiteCorreo } from "../security/headers.js";
-import { consumirCodigo, descartarCodigos, emitirCodigo } from "../security/codigos.js";
-import { comprobarIntentos, limpiarTrasExito, registrarIntento } from "../security/intentos.js";
 import { esClaveTrivial } from "../security/clave-temporal.js";
-import { enviarCorreo } from "../mail/transporte.js";
-import { correoRecuperacion } from "../mail/plantillas.js";
-import {
-  clavesDeCodigo, esquemaCorreo, exigirCorreoConfigurado, textoEspera,
-} from "./auth.routes.js";
-import { reglaClave } from "./esquemas.js";
 
 export const rutasClave = Router();
 
@@ -98,6 +96,24 @@ rutasClave.post("/password", exigirSesion, async (req, res) => {
     throw new HttpError(422, "La contraseña actual no es correcta");
   }
 
+  /**
+   * Al docente se le exigen 12 caracteres y al estudiante 4.
+   *
+   * La asimetría ya existía en los scripts del servidor
+   * (`scripts/crear-docente.mjs`); el que no la tenía era este endpoint, y eso
+   * dejaba abierta una puerta tonta: el docente al que se le exigen 12 al
+   * crearle la cuenta podía ponerse 4 desde la web al día siguiente. La regla
+   * tiene que vivir donde se aplica, no solo donde se da de alta.
+   *
+   * El motivo de los dos números está en `routes/esquemas.ts`: quien escribe 4
+   * es un niño en un teclado de diez teclas; el docente, en un teclado entero,
+   * y su cuenta ve los datos de todo el curso.
+   */
+  const minimo = usuario.role === "teacher" ? 12 : 4;
+  if (new_password.length < minimo) {
+    throw new HttpError(422, `La contraseña nueva debe tener al menos ${minimo} caracteres`);
+  }
+
   // Cambiarla por la misma no cambia nada y, sin embargo, cerraría la sesión en
   // todos los dispositivos: mejor decirlo que dejar al niño fuera por nada.
   if (current_password === new_password) {
@@ -127,91 +143,5 @@ rutasClave.post("/password", exigirSesion, async (req, res) => {
     // pantalla de inicio de sesión en vez de dejarlo dando vueltas con un token
     // que acaba de dejar de valer.
     detail: "Contraseña actualizada. Vuelve a iniciar sesión en tus dispositivos.",
-  });
-});
-
-// ─── Recuperación con un código enviado al correo ─────────────────────────────
-
-/**
- * Pide un código para elegir una clave nueva sin conocer la actual.
- *
- * Responde siempre lo mismo, exista o no la cuenta, y no espera al envío del
- * correo: si tardara más cuando la cuenta existe, el tiempo de respuesta diría
- * lo que el mensaje calla. Solo se envía a cuentas con el correo confirmado;
- * las que dio de alta el docente con un correo de aula sin buzón siguen
- * recuperándose como siempre, pidiéndole al docente que la regenere.
- */
-rutasClave.post("/password/forgot", limiteCorreo, async (req, res) => {
-  exigirCorreoConfigurado();
-  const { email } = esquemaCorreo.parse(req.body);
-
-  const usuario = await buscarPorEmail(email);
-  if (usuario?.email_verified && usuario.email) {
-    const correo = usuario.email;
-    const emision = await emitirCodigo(usuario.id, "reset");
-    if (emision.ok) {
-      enviarCorreo(correoRecuperacion(correo, usuario.name, emision.codigo))
-        .catch(async (error: Error) => {
-          console.error("[correo] no se pudo enviar la recuperación:", error.message);
-          await descartarCodigos(usuario.id, "reset").catch(() => {});
-        });
-    }
-  }
-
-  res.json({
-    ok: true,
-    detail: "Si hay una cuenta con ese correo, te enviamos un código para cambiar la clave.",
-  });
-});
-
-const esquemaRestablecer = z.object({
-  email: z.string().trim().toLowerCase().min(1, "Falta el correo").max(254),
-  code: z.string().trim().regex(/^\d{6}$/, "El código son 6 números"),
-  new_password: reglaClave,
-});
-
-/**
- * Cambia la clave con el código recibido por correo.
- *
- * La clave nueva se valida **antes** de mirar el código: si se gastara el
- * código y luego se rechazara la clave por trivial, el niño tendría que pedir
- * otro correo por haber elegido «1234».
- *
- * Igual que `POST /password`, revoca todas las sesiones antes de cambiar la
- * clave: quien recupera la cuenta suele hacerlo porque otro la está usando. No
- * devuelve tokens; se entra después con la clave nueva por `/token`, que es el
- * camino que lleva el freno por intentos.
- */
-rutasClave.post("/password/reset", limiteCorreo, async (req, res) => {
-  const { email, code, new_password } = esquemaRestablecer.parse(req.body);
-
-  if (esClaveTrivial(new_password)) {
-    throw new HttpError(422, "Esa clave es muy fácil de adivinar. Elige otra.");
-  }
-
-  const [ip, cuenta] = clavesDeCodigo(req, email);
-  const veredicto = await comprobarIntentos(ip, cuenta);
-  if (!veredicto.permitido) {
-    throw new HttpError(
-      429,
-      `Demasiados códigos equivocados. Espera ${textoEspera(veredicto.esperaSegundos)}.`,
-    );
-  }
-
-  const usuario = await buscarPorEmail(email);
-  const valido =
-    !!usuario?.email_verified && (await consumirCodigo(usuario.id, "reset", code));
-  if (!usuario || !valido) {
-    await registrarIntento(ip, cuenta, false);
-    throw new HttpError(422, "El código no es correcto o ya caducó. Revísalo o pide otro.");
-  }
-
-  await limpiarTrasExito(ip, cuenta);
-  await revocarSesiones(usuario.id);
-  await cambiarClave(usuario.id, new_password);
-
-  res.json({
-    ok: true,
-    detail: "Listo, ya tienes tu clave nueva. Entra con ella.",
   });
 });

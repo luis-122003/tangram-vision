@@ -46,17 +46,3 @@ export function correoVerificacion(para: string, nombre: string, codigo: string)
     html: html(nombre, intro, codigo, cierre),
   };
 }
-
-export function correoRecuperacion(para: string, nombre: string, codigo: string): Mensaje {
-  const intro = "Pediste cambiar tu clave de Tangram IA. Escribe este código para elegir una nueva:";
-  const cierre =
-    "Si no lo pediste tú, ignora este correo: tu clave sigue siendo la misma.";
-  return {
-    para,
-    asunto: `${codigo} es tu código para cambiar la clave`,
-    texto:
-      `Hola, ${nombre}:\n\n${intro}\n\n    ${codigo}\n\n` +
-      `El código vale ${minutosDeVida()} minutos y solo se puede usar una vez.\n\n${cierre}\n`,
-    html: html(nombre, intro, codigo, cierre),
-  };
-}

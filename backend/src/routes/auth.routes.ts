@@ -31,6 +31,7 @@ import { correoVerificacion } from "../mail/plantillas.js";
 import { esClaveTrivial } from "../security/clave-temporal.js";
 import { config } from "../config.js";
 import { HttpError, noAutorizado, prohibido } from "../http/errors.js";
+import { claveCaducada, diasDeClave } from "../security/vigencia-clave.js";
 import { esquemaDatosEstudiante, reglaClave } from "./esquemas.js";
 import type { Request } from "express";
 import type { Usuario } from "../types.js";
@@ -67,6 +68,19 @@ function respuestaDeSesion(usuario: Usuario) {
      * comodidad de la interfaz y no la única barrera.
      */
     must_change_password: usuario.must_change_password,
+    /**
+     * Días que lleva puesta la clave, y si ya pasó el plazo.
+     *
+     * Viaja en el ingreso porque el aviso tiene que salir **al entrar**, que es
+     * el único momento en que se mira sin estorbar. `null` en una cuenta sin
+     * fecha: la pantalla entonces no enseña nada, que es mejor que enseñar un
+     * número inventado.
+     *
+     * `password_expired` solo puede venir en `true` para un docente; al
+     * estudiante no se le caduca la clave (ver `security/vigencia-clave.ts`).
+     */
+    password_age_days: diasDeClave(usuario.password_changed_at),
+    password_expired: claveCaducada(usuario.password_changed_at, usuario.role),
   };
 }
 
@@ -462,6 +476,8 @@ rutasAuth.post("/token/refresh", async (req, res) => {
      * el estado de la cuenta, no una notificación.
      */
     must_change_password: usuario.must_change_password,
+    password_age_days: diasDeClave(usuario.password_changed_at),
+    password_expired: claveCaducada(usuario.password_changed_at, usuario.role),
   });
 });
 

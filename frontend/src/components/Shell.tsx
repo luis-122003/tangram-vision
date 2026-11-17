@@ -9,6 +9,7 @@ import StudentHome from "./StudentHome";
 import StudentsAdmin from "./StudentsAdmin";
 import FiguresAdmin from "./FiguresAdmin";
 import TeacherDashboard from "./TeacherDashboard";
+import MiClave, { DIAS_VIGENCIA } from "./MiClave";
 import type { Figure, User } from "../types";
 
 /**
@@ -17,7 +18,9 @@ import type { Figure, User } from "../types";
  * La barra se separa del contenido con un filete negro grueso, no con un
  * degradado: en este estilo lo que divide es la línea.
  */
-export default function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
+export default function Shell(
+  { user, onLogout }: { user: User; onLogout: (motivo?: string) => void },
+) {
   /**
    * El rol se resuelve una vez y decide **qué se pinta**, no solo qué botones
    * hay. Antes las pestañas del docente se le ocultaban al estudiante y el
@@ -32,9 +35,24 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
    */
   const esDocente = user.role === ROLES.TEACHER;
 
-  const [view,      setView]      = useState<"home" | "game" | "dashboard" | "students" | "figures">(
-    esDocente ? "dashboard" : "home",
+  /**
+   * Con la clave caducada se entra directamente a «Mi clave», y no al registro
+   * de intentos: el servidor cierra las rutas del panel hasta que se cambie
+   * (ver `exigirDocente`), así que cualquier otra vista sería una pantalla de
+   * error. Mejor llevar a donde se arregla.
+   */
+  const [view, setView] = useState<"home" | "game" | "dashboard" | "students" | "figures" | "clave">(
+    esDocente ? (user.password_expired ? "clave" : "dashboard") : "home",
   );
+
+  /**
+   * El aviso de la antigüedad de la clave, que sale **al entrar** y se puede
+   * apartar. Vuelve en el siguiente ingreso porque el estado se va con la
+   * sesión: es un recordatorio por jornada, no una notificación permanente que
+   * se acabe leyendo como parte del decorado. Con la clave ya caducada no se
+   * aparta: ahí no es un recordatorio, es la razón de que el panel no responda.
+   */
+  const [avisoClave, setAvisoClave] = useState(true);
   const [activeFig, setActiveFig] = useState<Figure | null>(null);
   const [figures,      setFigures]      = useState<Figure[]>([]);
   const [figuresError, setFiguresError] = useState("");
@@ -62,6 +80,7 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
         { id: "dashboard" as const, label: "Intentos" },
         { id: "students"  as const, label: "Estudiantes" },
         { id: "figures"   as const, label: "Figuras" },
+        { id: "clave"     as const, label: "Mi clave" },
       ]
     : [{ id: "home" as const, label: "Mis figuras" }];
 
@@ -122,7 +141,7 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
             ...BRUT.raised(3, BRUT.warning),
           }}>{iniciales}</div>
           <span style={{ fontSize: 13, fontWeight: 600, color: BRUT.ink }}>{user.name}</span>
-          <button onClick={onLogout} style={{
+          <button onClick={() => onLogout()} style={{
             fontSize: 12, padding: "8px 15px", cursor: "pointer",
             fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
             color: BRUT.ink, ...BRUT.raised(3, BRUT.card),
@@ -131,6 +150,34 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
       </nav>
 
       <main style={{ maxWidth: 1000, margin: "0 auto", padding: "2rem 1.75rem" }}>
+        {esDocente && user.password_age_days != null && avisoClave && view !== "clave" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 14, marginBottom: 22,
+            padding: "13px 16px", fontSize: 13, fontWeight: 600, color: BRUT.ink,
+            ...BRUT.subtle(user.password_expired ? BRUT.danger : BRUT.info),
+          }}>
+            <span style={{ flex: 1 }}>
+              {user.password_expired
+                ? `Tu clave lleva ${user.password_age_days} días y ya pasó el plazo de ${DIAS_VIGENCIA}. Cámbiala para seguir usando el panel.`
+                : `Tu clave lleva ${user.password_age_days} ${user.password_age_days === 1 ? "día" : "días"} puesta. Se cambia cada ${DIAS_VIGENCIA}.`}
+            </span>
+            <button onClick={() => setView("clave")} style={{
+              fontSize: 12, padding: "8px 14px", cursor: "pointer",
+              fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
+              color: BRUT.ink, ...BRUT.raised(3, BRUT.card),
+            }}>Cambiarla</button>
+            {/* Caducada no se aparta: no es un recordatorio, es el motivo de
+                que el resto del panel devuelva 403. */}
+            {!user.password_expired && (
+              <button onClick={() => setAvisoClave(false)} aria-label="Ocultar el aviso"
+                style={{
+                  background: "none", border: "none", padding: "0 4px",
+                  cursor: "pointer", fontSize: 18, fontWeight: 900, color: BRUT.ink,
+                }}>×</button>
+            )}
+          </div>
+        )}
+
         {view === "home"      && <StudentHome user={user} figures={figures}
                                               figuresError={figuresError}
                                               onSelectFigure={handleSelectFigure} />}
@@ -138,6 +185,7 @@ export default function Shell({ user, onLogout }: { user: User; onLogout: () => 
         {view === "dashboard" && esDocente && <TeacherDashboard figures={figures} />}
         {view === "students"  && esDocente && <StudentsAdmin />}
         {view === "figures"   && esDocente && <FiguresAdmin onChanged={() => setRecarga(n => n + 1)} />}
+        {view === "clave"     && esDocente && <MiClave user={user} onCambiada={onLogout} />}
       </main>
     </div>
   );

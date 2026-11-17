@@ -17,6 +17,7 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { verificarAcceso, type Identidad } from "./jwt.js";
 import { buscarPorId } from "../db/users.js";
+import { claveCaducada, DIAS_VIGENCIA_CLAVE } from "../security/vigencia-clave.js";
 import { HttpError, noAutorizado, prohibido } from "../http/errors.js";
 
 /** Lo que se responde cuando el `:id` de la ruta no es un identificador. */
@@ -53,6 +54,8 @@ declare global {
        * justo el rato en el que el estudiante está intentando jugar.
        */
       claveTemporal?: boolean;
+      /** La clave del docente pasó de los días que vale. Ver `exigirDocente`. */
+      claveCaducada?: boolean;
     }
   }
 }
@@ -103,6 +106,7 @@ export async function exigirSesion(
     // el cambio surte efecto en la siguiente petición y no cuando caduque.
     req.usuario = { ...identidad, role: usuario.role, name: usuario.name };
     req.claveTemporal = usuario.must_change_password;
+    req.claveCaducada = claveCaducada(usuario.password_changed_at, usuario.role);
     next();
   } catch (error) {
     next(error);
@@ -139,9 +143,28 @@ export function exigirClaveDefinitiva(
   next();
 }
 
+/**
+ * Deja pasar solo al docente, y solo si su clave sigue vigente.
+ *
+ * La caducidad se comprueba aquí y no en cada ruta porque aquí pasan **todas**
+ * las del panel: añadir un middleware más a cada una habría dejado fuera, tarde
+ * o temprano, a la que se escribiera mañana.
+ *
+ * Y se comprueba en el servidor, no solo en la pantalla, por lo mismo que
+ * `exigirClaveDefinitiva`: un cliente viejo o escrito a mano se saltaría el
+ * aviso. Cambiar la clave (`POST /password`) no pasa por aquí, así que la
+ * salida de este estado queda siempre abierta.
+ */
 export function exigirDocente(req: Request, _res: Response, next: NextFunction): void {
   if (req.usuario?.role !== "teacher") {
     next(prohibido("Solo el docente puede ver esta información"));
+    return;
+  }
+  if (req.claveCaducada) {
+    next(prohibido(
+      `Tu contraseña lleva más de ${DIAS_VIGENCIA_CLAVE} días. ` +
+      "Cámbiala para seguir usando el panel.",
+    ));
     return;
   }
   next();

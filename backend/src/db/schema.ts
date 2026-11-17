@@ -317,6 +317,16 @@ const COLUMNAS_REQUERIDAS: ReadonlyArray<[string, string, string]> = [
    */
   ["users", "username_hash", "CHAR(64) NULL"],
   ["users", "username_enc", "TEXT NULL"],
+  /**
+   * Cuándo se cambió la clave por última vez, para la caducidad del docente
+   * (`security/vigencia-clave.ts`). No vale `created_at`: una cuenta de hace un
+   * año con la clave cambiada ayer figuraría como caducada.
+   *
+   * El DEFAULT hace que las cuentas que ya existían cuenten desde el día de la
+   * migración y no desde 1970, que las habría dejado a todas caducadas de
+   * golpe: el docente habría llegado a un panel cerrado sin haber tocado nada.
+   */
+  ["users", "password_changed_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"],
 ];
 
 async function asegurarColumnas(): Promise<void> {

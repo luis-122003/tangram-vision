@@ -36,6 +36,12 @@ export interface UsuarioFila {
    * se le envió al correo. Las demás cuentas valen 1 desde que existen.
    */
   email_verified: number;
+  /**
+   * Cuándo se puso la clave que la cuenta tiene ahora. La fija `cambiarClave`
+   * en el mismo UPDATE que la cambia, para que no puedan quedar desparejadas.
+   * NULL solo si alguien la vacía a mano; ver `security/vigencia-clave.ts`.
+   */
+  password_changed_at: Date | null;
   created_at: Date;
 }
 
@@ -54,6 +60,8 @@ export interface Usuario {
   must_change_password: boolean;
   /** El correo está confirmado. Sin esto la cuenta no puede iniciar sesión. */
   email_verified: boolean;
+  /** Cuándo se puso la clave actual. Con esto se cuentan los días y la caducidad. */
+  password_changed_at: Date | null;
 }
 
 /**

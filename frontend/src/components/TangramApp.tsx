@@ -32,13 +32,19 @@ export default function TangramApp() {
     });
   }, []);
 
-  function handleLogout() {
+  /**
+   * `motivo` lo pasa quien cierra la sesión por algo que hay que contar: hoy,
+   * el cambio de clave, que revoca todos los tokens y obliga a entrar de nuevo.
+   * Sin él —el botón «Salir»— no se enseña nada, que es lo correcto: quien se
+   * va porque quiere no necesita que le expliquen por qué está en el login.
+   */
+  function handleLogout(motivo?: string) {
     // Se avisa al servidor para que invalide también el token de refresco: sin
     // eso, cerrar sesión solo borraría la copia local y el token seguiría
     // siendo válido hasta caducar.
     void apiLogout();
     setUser(null);
-    setAviso(null);
+    setAviso(motivo ?? null);
   }
 
   function handleLogin(u: User) {

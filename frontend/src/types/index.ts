@@ -6,6 +6,14 @@ export interface User {
   name:  string;
   email: string;
   role:  Role;
+  /**
+   * Días que lleva puesta la clave, tal como los contó el servidor al entrar.
+   * `null` o ausente cuando la cuenta no tiene fecha de cambio, y entonces no
+   * se enseña nada: un número inventado sería peor que ninguno.
+   */
+  password_age_days?: number | null;
+  /** Pasó el plazo y el servidor ya no deja usar el panel hasta cambiarla. */
+  password_expired?: boolean;
 }
 
 /**

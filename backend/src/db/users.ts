@@ -60,6 +60,7 @@ function descifrarUsuario(fila: UsuarioFila): Usuario {
     // «no verificada»: deja una cuenta sin entrar, no una cuenta sin dueño
     // probado con sesión abierta.
     email_verified: fila.email_verified === 1,
+    password_changed_at: fila.password_changed_at ?? null,
   };
 }
 
@@ -126,8 +127,13 @@ export async function cambiarClave(
   temporal = false,
 ): Promise<void> {
   const hash = await bcrypt.hash(claveNueva, RONDAS_BCRYPT);
+  // La fecha va en el mismo UPDATE que el hash y no en uno aparte: si fueran dos
+  // consultas, un fallo entre ellas dejaría una clave nueva con la fecha vieja,
+  // y el docente se encontraría su clave recién puesta ya caducada.
   await pool.query(
-    "UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?",
+    `UPDATE users
+        SET password_hash = ?, must_change_password = ?, password_changed_at = NOW()
+      WHERE id = ?`,
     [hash, temporal ? 1 : 0, userId],
   );
 }

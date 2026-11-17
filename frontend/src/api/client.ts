@@ -132,6 +132,10 @@ export interface LoginResponse {
   id:           number;
   /** La cuenta sigue con la clave temporal que le puso el docente. */
   must_change_password?: boolean;
+  /** Días que lleva puesta la clave actual. Null si la cuenta no tiene fecha. */
+  password_age_days?: number | null;
+  /** Ya pasó el plazo de la clave; solo puede venir en true para un docente. */
+  password_expired?: boolean;
 }
 
 /**
@@ -190,48 +194,31 @@ export async function login(email: string, password: string): Promise<User> {
     name:  data.name,
     email,
     role:  data.role as User["role"],
+    password_age_days: data.password_age_days ?? null,
+    password_expired:  data.password_expired === true,
   };
   iniciarSesion(data.access_token, data.refresh_token, usuario);
   return usuario;
 }
 
-/** POST sin sesión, para las rutas de recuperación de clave. */
-async function postSinSesion(path: string, cuerpo: unknown, fallo: string): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(`${API}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cuerpo),
-      signal: AbortSignal.timeout(ESPERA_MS),
-    });
-  } catch (e) {
-    throw errorDeRed(e);
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    throw new Error(typeof err?.detail === "string" ? err.detail : fallo);
-  }
-}
-
 /**
- * Pide un código al correo para cambiar la clave olvidada.
+ * Cambia la propia clave sabiendo la actual.
  *
- * El servidor responde lo mismo exista o no la cuenta, así que no se puede
- * usar para averiguar qué correos están dados de alta.
+ * Es el único camino que queda en la web para cambiar una clave: la
+ * recuperación por correo se quitó, con sus rutas del backend incluidas. Pedir
+ * la actual aunque ya haya sesión no es burocracia; es lo que impide que quien
+ * encuentre una sesión abierta se quede con la cuenta en dos clics.
+ *
+ * Al volver, la sesión de quien llama **ya no vale**: el servidor revoca todas
+ * las del usuario, también esta. Quien use esto tiene que llevar a la persona
+ * de vuelta al ingreso, y no dejarla en una pantalla cuya siguiente petición
+ * será un 401.
  */
-export function olvideClave(email: string): Promise<void> {
-  return postSinSesion("/password/forgot", { email }, "No se pudo enviar el código");
-}
-
-/**
- * Cambia la clave olvidada con el código del correo. No abre sesión: el
- * servidor cierra todas las que hubiera y después se entra con la clave nueva.
- */
-export function restablecerClave(email: string, codigo: string, nueva: string): Promise<void> {
-  return postSinSesion(
-    "/password/reset", { email, code: codigo, new_password: nueva }, "No se pudo cambiar la clave",
-  );
+export async function cambiarMiClave(actual: string, nueva: string): Promise<void> {
+  await apiFetch<{ ok: boolean; detail: string }>("/password", {
+    method: "POST",
+    body:   JSON.stringify({ current_password: actual, new_password: nueva }),
+  });
 }
 
 /** Cierra la sesión en todos los dispositivos. */
