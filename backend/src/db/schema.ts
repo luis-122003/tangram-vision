@@ -327,7 +327,55 @@ const COLUMNAS_REQUERIDAS: ReadonlyArray<[string, string, string]> = [
    * golpe: el docente habría llegado a un panel cerrado sin haber tocado nada.
    */
   ["users", "password_changed_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"],
+  /**
+   * Cuándo quedó el perfil en condiciones de usarse: correo confirmado y la
+   * clave ya elegida por su dueño, no la temporal que repartió el docente. Es
+   * el momento en que la columna «Estado» del panel pasa a «Perfil activo».
+   *
+   * No vale `created_at`: entre que el docente da de alta a una clase entera y
+   * que cada niño entra y cambia su clave pueden pasar semanas, y lo que el
+   * docente quiere saber mirando la lista es quién ya arrancó.
+   *
+   * NULL mientras no haya pasado. La fija `asegurarActivacion`.
+   */
+  ["users", "activated_at", "TIMESTAMP NULL DEFAULT NULL"],
+  /**
+   * Último ingreso con éxito. Se escribe en `/token` y en `/register/verify`,
+   * que son las dos puertas por las que se abre sesión.
+   *
+   * Es distinto del último intento, que sale de `sessions`: un estudiante puede
+   * entrar, mirar el catálogo y salir sin fotografiar nada. Para el docente son
+   * dos preguntas distintas —«¿lo está usando?» y «¿está armando figuras?»— y
+   * confundirlas era lo que hacía que la lista dijera «Nunca entró» de alguien
+   * que entraba todos los días.
+   */
+  ["users", "last_login_at", "TIMESTAMP NULL DEFAULT NULL"],
 ];
+
+/**
+ * Pone fecha de activación a las cuentas que ya estaban activas antes de que
+ * esta columna existiera.
+ *
+ * Se usa su `created_at`, que es lo más cercano a la verdad que queda: el
+ * momento exacto en que cada una se activó no se guardó nunca y no hay forma de
+ * reconstruirlo. Dejarlas en NULL habría sido más honesto pero menos útil: el
+ * panel enseñaría un guion en todas las cuentas antiguas, que son todas.
+ *
+ * Solo toca las que ya cumplen las dos condiciones; una cuenta con la clave
+ * temporal todavía puesta se queda en NULL y se activará cuando le toque.
+ */
+async function rellenarActivacion(): Promise<void> {
+  const [res] = await pool.query<any>(
+    `UPDATE users
+        SET activated_at = created_at
+      WHERE activated_at IS NULL
+        AND must_change_password = 0
+        AND email_verified = 1`,
+  );
+  if (res.affectedRows > 0) {
+    console.log(`[migración] fecha de activación puesta a ${res.affectedRows} cuenta(s)`);
+  }
+}
 
 async function asegurarColumnas(): Promise<void> {
   for (const [tabla, columna, definicion] of COLUMNAS_REQUERIDAS) {
@@ -436,6 +484,7 @@ export async function inicializarBaseDeDatos(): Promise<void> {
   await crearTablas();
   await migrarDatosPersonales();
   await asegurarColumnas();
+  await rellenarActivacion();
   await correoOpcional();
   await asegurarIndices();
   await sembrarUsuarios();

@@ -460,7 +460,10 @@ export default function StudentsAdmin() {
             <table style={{ width: "100%", fontSize: 13, minWidth: 880, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: BRUT.ink }}>
-                  {["Estudiante", "Correo / usuario", "Estado", "Alta", "Intentos", "Último intento", ""].map(h => (
+                  {[
+                    "Nombre estudiante", "Correo", "Estado del perfil",
+                    "Fecha de activación", "Intentos", "Última fecha de ingreso", "",
+                  ].map(h => (
                     <th key={h} style={{
                       ...T.eyebrow(BRUT.paper), fontSize: 10,
                       padding: "11px 14px", textAlign: "left",
@@ -500,18 +503,27 @@ export default function StudentsAdmin() {
                             : s.must_change_password ? "Clave temporal" : "Perfil activo"}
                         </span>
                       </td>
-                      {/* Cuándo se creó la cuenta. Es lo que distingue, en una
-                          lista ordenada por alta, al que se registró hoy desde
-                          la app del que el docente dio de alta en septiembre. */}
+                      {/* Cuándo el perfil quedó listo para usarse, que no es
+                          cuándo se creó la cuenta: entre que el docente da de
+                          alta a una clase y que cada niño entra y cambia su
+                          clave pueden pasar semanas. Un guion significa que
+                          todavía no ha pasado; la columna de al lado dice qué
+                          le falta. */}
                       <td style={{ ...celda, color: BRUT.muted, fontSize: 12, fontWeight: 500 }}>
-                        {new Date(s.created_at).toLocaleDateString("es-CO")}
+                        {s.activated_at
+                          ? new Date(s.activated_at).toLocaleDateString("es-CO")
+                          : "—"}
                       </td>
                       <td style={{ ...celda, ...T.stat(14), letterSpacing: 0 }}>
                         {s.passed} / {s.attempts}
                       </td>
+                      {/* El último ingreso, no el último intento: se puede
+                          entrar, mirar el catálogo y salir sin fotografiar
+                          nada. Son dos preguntas distintas y antes la lista
+                          contestaba la segunda con el título de la primera. */}
                       <td style={{ ...celda, color: BRUT.muted, fontSize: 12, fontWeight: 500 }}>
-                        {s.last_attempt
-                          ? new Date(s.last_attempt).toLocaleString("es-CO")
+                        {s.last_login_at
+                          ? new Date(s.last_login_at).toLocaleString("es-CO")
                           : "Nunca entró"}
                       </td>
                       <td style={{ ...celda, whiteSpace: "nowrap" }}>

@@ -136,6 +136,37 @@ export async function cambiarClave(
       WHERE id = ?`,
     [hash, temporal ? 1 : 0, userId],
   );
+  // Cambiar la clave temporal por una propia es, para un estudiante, el paso
+  // que le faltaba para estar activo. Aquí no hay que saberlo: el UPDATE de
+  // `asegurarActivacion` se encarga de comprobar si de verdad lo está.
+  await asegurarActivacion(userId);
+}
+
+/**
+ * Marca el perfil como activo, si es que ya lo está.
+ *
+ * Las condiciones viven en el propio UPDATE y no en quien llama: así se puede
+ * invocar desde cualquier punto que *pueda* haber completado la activación —el
+ * alta, el cambio de clave, la confirmación del correo, el ingreso— sin que
+ * ninguno tenga que saber qué hicieron los demás. Lo que no corresponda, no
+ * escribe; y `activated_at IS NULL` lo hace idempotente, así que repetirlo no
+ * mueve una fecha ya puesta.
+ */
+export async function asegurarActivacion(userId: number): Promise<void> {
+  await pool.query(
+    `UPDATE users
+        SET activated_at = NOW()
+      WHERE id = ?
+        AND activated_at IS NULL
+        AND must_change_password = 0
+        AND email_verified = 1`,
+    [userId],
+  );
+}
+
+/** Anota el ingreso. Se llama solo cuando la autenticación ya salió bien. */
+export async function registrarIngreso(userId: number): Promise<void> {
+  await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = ?", [userId]);
 }
 
 /**
@@ -173,7 +204,7 @@ export async function listarEstudiantes(): Promise<EstudianteResumen[]> {
   // tabla de intentos y no se multiplica por cada estudiante.
   const [filas] = await pool.query<any[]>(
     `SELECT u.id, u.email_enc, u.username_enc, u.name_enc, u.must_change_password,
-            u.email_verified, u.created_at,
+            u.email_verified, u.created_at, u.activated_at, u.last_login_at,
             COALESCE(s.attempts, 0) AS attempts,
             COALESCE(s.passed, 0)   AS passed,
             s.last_attempt
@@ -199,6 +230,8 @@ export async function listarEstudiantes(): Promise<EstudianteResumen[]> {
     email_verified: f.email_verified === 1,
     must_change_password: f.must_change_password === 1,
     created_at: f.created_at,
+    activated_at: f.activated_at ?? null,
+    last_login_at: f.last_login_at ?? null,
     attempts: Number(f.attempts ?? 0),
     passed: Number(f.passed ?? 0),
     last_attempt: f.last_attempt ?? null,
@@ -248,7 +281,11 @@ export async function crearEstudiante(
       temporal ? 1 : 0, verificado ? 1 : 0,
     ],
   );
-  return Number(res.insertId);
+  // Un alta en la que el docente escribió la clave nace ya activa; una con
+  // clave generada, no. Las dos pasan por aquí y el UPDATE distingue.
+  const id = Number(res.insertId);
+  await asegurarActivacion(id);
+  return id;
 }
 
 /**

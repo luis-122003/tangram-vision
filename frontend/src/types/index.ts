@@ -35,8 +35,16 @@ export interface Student {
   /** Sigue con la clave temporal: todavía no ha activado su perfil. */
   must_change_password: boolean;
   created_at:   string;
+  /**
+   * Cuándo quedó el perfil listo para usarse: correo confirmado y clave propia.
+   * Null mientras le falte alguna de las dos.
+   */
+  activated_at:  string | null;
+  /** Último ingreso con éxito. Null si nunca ha entrado. */
+  last_login_at: string | null;
   attempts:     number;
   passed:       number;
+  /** Última vez que fotografió una figura. Distinto del último ingreso. */
   last_attempt: string | null;
 }
 

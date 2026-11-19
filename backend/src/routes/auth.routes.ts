@@ -17,7 +17,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import {
-  buscarPorEmail, buscarPorId, crearEstudiante, esCorreoDuplicado, fijarCorreo,
+  asegurarActivacion, buscarPorEmail, buscarPorId, crearEstudiante,
+  esCorreoDuplicado, fijarCorreo, registrarIngreso,
   marcarVerificado, rehacerPendiente, revocarSesiones, verificarUsuario,
 } from "../db/users.js";
 import { firmarAcceso, firmarRefresco, segundosDeVida, verificarRefresco } from "../auth/jwt.js";
@@ -194,6 +195,11 @@ rutasAuth.post("/token", limiteLogin, async (req, res) => {
     );
   }
 
+  // Se anota después de haber pasado todas las barreras: lo que interesa al
+  // docente es cuándo entró de verdad, no cuándo alguien probó una clave.
+  await registrarIngreso(usuario.id);
+  await asegurarActivacion(usuario.id);
+
   res.json(respuestaDeSesion(usuario));
 });
 
@@ -344,6 +350,13 @@ rutasAuth.post("/register/verify", limiteCorreo, async (req, res) => {
 
   const verificado = await buscarPorId(usuario.id);
   if (!verificado) throw new HttpError(500, "La cuenta se verificó pero no se pudo leer");
+
+  // Esta ruta devuelve sesión abierta, así que también es un ingreso. Y
+  // confirmar el correo suele ser el último paso que le faltaba a la cuenta
+  // para estar activa.
+  await registrarIngreso(verificado.id);
+  await asegurarActivacion(verificado.id);
+
   res.json(respuestaDeSesion(verificado));
 });
 

@@ -82,6 +82,13 @@ export interface EstudianteResumen {
   email_verified: boolean;
   must_change_password: boolean;
   created_at: Date;
+  /**
+   * Cuándo quedó el perfil en condiciones de usarse. Null mientras le falte
+   * confirmar el correo o cambiar la clave temporal.
+   */
+  activated_at: Date | null;
+  /** Último ingreso con éxito. Null si nunca ha entrado. */
+  last_login_at: Date | null;
   /** Intentos registrados y cuántos de ellos dio por buenos el validador. */
   attempts: number;
   passed: number;
