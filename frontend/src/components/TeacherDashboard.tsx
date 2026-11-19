@@ -58,8 +58,6 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
     </div>
   );
 
-  const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
   // Filete fino en las celdas: a 3px, veinte filas se leen como una reja.
   const celda: React.CSSProperties = {
     padding: "12px 15px",
@@ -189,23 +187,6 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
             </table>
           </div>
         )}
-      </div>
-
-      <div style={{ padding: "1.2rem 1.4rem", ...BRUT.inset() }}>
-        <p style={{ ...T.eyebrow(BRUT.ink), margin: "0 0 10px" }}>
-          Conexión al backend
-        </p>
-        <p style={{
-          margin: 0, fontSize: 12, color: BRUT.ink, fontWeight: 600,
-          fontFamily: "var(--font-mono)", lineHeight: 1.9,
-        }}>
-          POST {API}/predict<br/>
-          GET  {API}/sessions<br/>
-          GET  {API}/students/&#123;id&#125;/stats
-        </p>
-        <p style={{ margin: "12px 0 0", fontSize: 11, fontWeight: 500, color: BRUT.muted }}>
-          Node.js · Express · MySQL · YOLOv8s-seg · validador geométrico
-        </p>
       </div>
     </div>
   );
