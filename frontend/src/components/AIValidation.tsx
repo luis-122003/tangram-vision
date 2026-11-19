@@ -4,6 +4,7 @@ import Comparison from "./Comparison";
 import { BRUT, T } from "../theme/brut";
 import { pct } from "../utils/format";
 import type { Checks, Figure, PredictResponse, User } from "../types";
+import { useTelefono } from "../hooks/useMedia";
 
 /**
  * Barra de avance: un canal con filete negro y dentro una barra de color plano.
@@ -114,6 +115,8 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
   user: User;
   onResult: (result: PredictResponse) => void;
 }) {
+  const telefono = useTelefono();
+
   const { status, result, errorMsg, run, reset } = usePredict();
 
   // Cuando el estudiante toma o sube una foto nueva, se envía sola.
@@ -335,7 +338,11 @@ export default function AIValidation({ imageData, figure, user, onResult }: {
           : `Fichas encontradas: ${result.pieces.total} de 7`}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: telefono ? "1fr" : "1fr 1fr",
+        gap: 12,
+      }}>
         {[
           { label: "Seguridad de las fichas", value: result.confidence, tono: BRUT.info },
           { label: "Parecido con el modelo",  value: result.iou_score,  tono: BRUT.accent },

@@ -3,6 +3,7 @@ import { createFigure, extractSilhouette, getFigures, setFigureEnabled } from ".
 import { BRUT, T } from "../theme/brut";
 import Silhouette from "./Silhouette";
 import type { Category, Difficulty, Figure, SilhouetteResult } from "../types";
+import { useEstrecho, useTelefono } from "../hooks/useMedia";
 
 /**
  * Gestión de figuras: dar de alta una figura nueva desde una foto y ocultar o
@@ -74,6 +75,9 @@ export default function FiguresAdmin({ onChanged }: {
   /** Avisa al Shell para que recargue el catálogo que usan las demás pestañas. */
   onChanged: () => void;
 }) {
+  const estrecho = useEstrecho();
+  const telefono = useTelefono();
+
   const [figuras,  setFiguras]  = useState<Figure[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState("");
@@ -245,7 +249,11 @@ export default function FiguresAdmin({ onChanged }: {
 
       {/* ── Formulario ────────────────────────────────────────────────────── */}
       <form onSubmit={guardar} style={{ padding: "1.4rem", ...BRUT.raised(6) }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: estrecho ? "1fr" : "1fr 1fr",
+          gap: 22,
+        }}>
           {/* Columna izquierda: datos y foto */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
@@ -256,7 +264,11 @@ export default function FiguresAdmin({ onChanged }: {
                 aria-label="Nombre de la figura"
               />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.6fr", gap: 10 }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: telefono ? "1fr" : "1fr 1fr 0.6fr",
+              gap: 10,
+            }}>
               <div>
                 <p style={etiqueta}>Categoría</p>
                 <select value={categoria} onChange={e => setCategoria(e.target.value as Category)}

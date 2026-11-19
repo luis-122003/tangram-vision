@@ -3,6 +3,7 @@ import {
   createStudent, createStudentsBulk, deleteStudent, getStudents, resetStudentPassword,
   updateStudent,
 } from "../api/client";
+import { useEstrecho, useTelefono } from "../hooks/useMedia";
 import { BRUT, T } from "../theme/brut";
 import type { BulkResult, Student, StudentCreated } from "../types";
 import {
@@ -33,6 +34,15 @@ import {
  * aquí: quién ya activó su perfil y quién sigue con la clave que le repartieron.
  */
 export default function StudentsAdmin() {
+  /**
+   * Tres columnas de formulario y una tabla de siete columnas no caben en un
+   * teléfono por mucho que se encojan. En estrecho el alta se apila y la tabla
+   * avisa de que se desliza; lo que no se hace es esconder columnas, porque la
+   * que sobra depende de lo que el docente venga a mirar.
+   */
+  const estrecho = useEstrecho();
+  const telefono = useTelefono();
+
   const [students, setStudents] = useState<Student[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState("");
@@ -263,7 +273,10 @@ export default function StudentsAdmin() {
           Dar de alta un estudiante
         </p>
         <div style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr 0.9fr auto",
+          display: "grid",
+          gridTemplateColumns: telefono ? "1fr"
+            : estrecho ? "1fr 1fr"
+            : "1fr 1fr 0.9fr auto",
           gap: 12, alignItems: "center",
         }}>
           <input
@@ -428,7 +441,10 @@ export default function StudentsAdmin() {
           display: "flex", alignItems: "center", justifyContent: "space-between",
           gap: 12, margin: "0 0 16px",
         }}>
-          <p style={{ ...T.title(18), margin: 0, textTransform: "uppercase" }}>
+          <p style={{
+            ...T.title(18), margin: 0, textTransform: "uppercase",
+            minWidth: 0, flex: "1 1 auto",
+          }}>
             Estudiantes
             <span style={{
               fontWeight: 500, fontSize: 12, color: BRUT.muted,
@@ -456,6 +472,14 @@ export default function StudentsAdmin() {
             Todavía no hay estudiantes dados de alta.
           </p>
         ) : (
+          <>
+            {/* Sin esto, en un teléfono la tabla parece cortada: el docente ve
+                que falta algo a la derecha pero nada le dice que se desliza. */}
+            {estrecho && (
+              <p style={{
+                margin: "0 0 10px", fontSize: 12, fontWeight: 600, color: BRUT.muted,
+              }}>Desliza la tabla a los lados para ver el resto →</p>
+            )}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", fontSize: 13, minWidth: 880, borderCollapse: "collapse" }}>
               <thead>
@@ -592,6 +616,7 @@ export default function StudentsAdmin() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </div>

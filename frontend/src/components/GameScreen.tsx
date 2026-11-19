@@ -6,6 +6,7 @@ import AIValidation from "./AIValidation";
 import CameraCapture from "./CameraCapture";
 import Silhouette from "./Silhouette";
 import type { Figure, PredictResponse, User } from "../types";
+import { useEstrecho } from "../hooks/useMedia";
 
 /** Contador de la cabecera: cifra grande sobre una placa de color. */
 function Contador({ label, value, tono }: {
@@ -26,6 +27,10 @@ function Contador({ label, value, tono }: {
 export default function GameScreen({ user, figure, onExit }: {
   user: User; figure: Figure; onExit: () => void;
 }) {
+  // El objetivo y la cámara lado a lado necesitan ancho real: en estrecho se
+  // apilan, con la figura arriba, que es lo que se mira antes de fotografiar.
+  const estrecho = useEstrecho();
+
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [seconds,  setSeconds]  = useState(0);
   const [errors,   setErrors]   = useState(0);
@@ -84,7 +89,11 @@ export default function GameScreen({ user, figure, onExit }: {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: estrecho ? "1fr" : "1fr 1fr",
+        gap: 20, alignItems: "start",
+      }}>
         <div>
           <p style={{ ...T.eyebrow(BRUT.ink), margin: "0 0 12px" }}>Tu foto</p>
           <CameraCapture onCapture={handleCapture} />

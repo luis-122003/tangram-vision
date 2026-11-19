@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSessions } from "../api/client";
 import { BRUT, T } from "../theme/brut";
 import { formatTime } from "../utils/format";
+import { useTelefono } from "../hooks/useMedia";
 import type { Figure, SessionRow } from "../types";
 
 /**
@@ -21,6 +22,9 @@ import type { Figure, SessionRow } from "../types";
  * verde o rojo solo en el resultado.
  */
 export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
+  // Cuatro cifras en 360 px son columnas de ochenta píxeles: el número cabe,
+  // su etiqueta no. En teléfono se apilan de dos en dos.
+  const telefono = useTelefono();
   const [attempts, setAttempts] = useState<SessionRow[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState("");
@@ -66,7 +70,11 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: telefono ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(170px, 1fr))",
+        gap: telefono ? 12 : 16,
+      }}>
         {[
           { label: "Intentos totales", value: totalCurso, tono: BRUT.card },
           { label: "Aprobados",        value: passed,     tono: BRUT.success },

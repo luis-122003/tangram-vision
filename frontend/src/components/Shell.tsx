@@ -10,6 +10,7 @@ import StudentsAdmin from "./StudentsAdmin";
 import FiguresAdmin from "./FiguresAdmin";
 import TeacherDashboard from "./TeacherDashboard";
 import MiClave, { DIAS_VIGENCIA } from "./MiClave";
+import { useEstrecho, useTelefono } from "../hooks/useMedia";
 import type { Figure, User } from "../types";
 
 /**
@@ -34,6 +35,16 @@ export default function Shell(
    * es no pedir datos que no van a llegar.
    */
   const esDocente = user.role === ROLES.TEACHER;
+
+  /**
+   * La barra deja de caber en una línea cuando el docente tiene cuatro
+   * pestañas, su nombre y el botón de salir. En vez de encoger la tipografía
+   * hasta que no se lea, se parte en dos filas: identidad arriba, pestañas
+   * abajo. En un teléfono desaparece además el nombre escrito, que ya está
+   * resumido en las iniciales de al lado.
+   */
+  const estrecho = useEstrecho();
+  const telefono = useTelefono();
 
   /**
    * Con la clave caducada se entra directamente a «Mi clave», y no al registro
@@ -96,17 +107,27 @@ export default function Shell(
       <nav style={{
         background: BRUT.card,
         borderBottom: `${BRUT.border}px solid ${BRUT.ink}`,
-        padding: "0 1.75rem", display: "flex", alignItems: "center", height: 68,
+        padding: estrecho ? "12px 1rem" : "0 1.75rem",
+        display: "flex", alignItems: "center",
+        flexWrap: estrecho ? "wrap" : "nowrap",
+        gap: estrecho ? 12 : 0,
+        height: estrecho ? "auto" : 68,
         position: "sticky", top: 0, zIndex: 10,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginRight: "auto" }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12,
+          marginRight: "auto", minWidth: 0,
+        }}>
           <div style={{
             width: 38, height: 38, display: "grid", placeItems: "center",
             ...BRUT.raised(3, BRUT.paper),
           }}>
             <Logo size={18} />
           </div>
-          <span style={{ ...T.title(16), letterSpacing: -0.3, textTransform: "uppercase" }}>
+          <span style={{
+            ...T.title(16), letterSpacing: -0.3, textTransform: "uppercase",
+            whiteSpace: "nowrap",
+          }}>
             Tangram IA
           </span>
           {esDocente && (
@@ -119,10 +140,21 @@ export default function Shell(
 
         {/* La pestaña activa se queda en color y aplastada contra su sombra,
             como una tecla que no ha vuelto a subir. */}
-        <div style={{ display: "flex", gap: 10, marginRight: 18 }}>
+        {/* En dos filas, las pestañas ocupan la segunda entera y se deslizan
+            si no caben: cuatro pestañas en 360 px no entran de ninguna manera,
+            y partirlas en dos líneas desordena la barra entera. */}
+        <div style={{
+          display: "flex", gap: 10,
+          marginRight: estrecho ? 0 : 18,
+          order: estrecho ? 3 : 0,
+          width: estrecho ? "100%" : "auto",
+          overflowX: "auto",
+          paddingBottom: estrecho ? 2 : 0,
+        }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setView(t.id)} style={{
               padding: "9px 17px", fontSize: 13, cursor: "pointer",
+              flexShrink: 0, whiteSpace: "nowrap",
               fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
               color: BRUT.ink,
               ...BRUT.raised(4, view === t.id ? BRUT.accent : BRUT.card),
@@ -140,7 +172,15 @@ export default function Shell(
             fontSize: 13, fontWeight: 900, color: BRUT.ink,
             ...BRUT.raised(3, BRUT.warning),
           }}>{iniciales}</div>
-          <span style={{ fontSize: 13, fontWeight: 600, color: BRUT.ink }}>{user.name}</span>
+          {/* Las iniciales de al lado ya dicen quién es; el nombre entero en
+              360 px empuja el botón de salir fuera de la pantalla. */}
+          {!telefono && (
+            <span style={{
+              fontSize: 13, fontWeight: 600, color: BRUT.ink,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              maxWidth: 160,
+            }}>{user.name}</span>
+          )}
           <button onClick={() => onLogout()} style={{
             fontSize: 12, padding: "8px 15px", cursor: "pointer",
             fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
@@ -149,14 +189,18 @@ export default function Shell(
         </div>
       </nav>
 
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "2rem 1.75rem" }}>
+      <main style={{
+        maxWidth: 1000, margin: "0 auto",
+        padding: telefono ? "1.2rem 1rem" : "2rem 1.75rem",
+      }}>
         {esDocente && user.password_age_days != null && avisoClave && view !== "clave" && (
           <div style={{
             display: "flex", alignItems: "center", gap: 14, marginBottom: 22,
+            flexWrap: "wrap",
             padding: "13px 16px", fontSize: 13, fontWeight: 600, color: BRUT.ink,
             ...BRUT.subtle(user.password_expired ? BRUT.danger : BRUT.info),
           }}>
-            <span style={{ flex: 1 }}>
+            <span style={{ flex: 1, minWidth: 200 }}>
               {user.password_expired
                 ? `Tu clave lleva ${user.password_age_days} días y ya pasó el plazo de ${DIAS_VIGENCIA}. Cámbiala para seguir usando el panel.`
                 : `Tu clave lleva ${user.password_age_days} ${user.password_age_days === 1 ? "día" : "días"} puesta. Se cambia cada ${DIAS_VIGENCIA}.`}
