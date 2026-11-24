@@ -196,6 +196,10 @@ export interface SiluetaExtraida {
   silhouette: Punto[];
   pieces_used: number;
   coverage: number;
+  /** Área de la silueta en triángulos pequeños; un Tangram completo mide 16. */
+  units: number;
+  imgsz: number;
+  /** La silueta mide lo que un Tangram completo: es lo que permite guardarla. */
   detection_ok: boolean;
   pieces: {
     detected: Record<string, number>;

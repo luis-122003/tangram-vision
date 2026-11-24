@@ -304,7 +304,8 @@ def decode_image(b64_str: str) -> np.ndarray | None:
 
 
 # ─── Endpoint principal ─────────────────────────────────────────────────────────
-def detectar_fichas(imagen: np.ndarray) -> tuple[list[tv.Deteccion], list[str]]:
+def detectar_fichas(imagen: np.ndarray,
+                    imgsz: int | None = None) -> tuple[list[tv.Deteccion], list[str]]:
     """Corre el detector sobre una imagen y devuelve las fichas ya depuradas.
 
     Vive fuera de `/analyze` porque lo usan dos endpoints: la calificación de
@@ -314,7 +315,7 @@ def detectar_fichas(imagen: np.ndarray) -> tuple[list[tv.Deteccion], list[str]]:
     inventario, se habría quedado en una sola de las dos copias.
     """
     det = yolo_model.predict(source=imagen, conf=YOLO_CONF,
-                             imgsz=YOLO_IMGSZ, max_det=30, verbose=False)
+                             imgsz=imgsz or YOLO_IMGSZ, max_det=30, verbose=False)
     piezas, avs = pipeline.desde_yolo(det[0]) if det else ([], [])
     piezas = pipeline.descartar_duplicados(piezas)
     # `descartar_duplicados` quita las cajas que se pisan, pero no ve los
@@ -327,7 +328,7 @@ def detectar_fichas(imagen: np.ndarray) -> tuple[list[tv.Deteccion], list[str]]:
 
 
 def detectar_con_recorte(
-    img: np.ndarray, crop: list[float] | None,
+    img: np.ndarray, crop: list[float] | None, imgsz: int | None = None,
 ) -> tuple[np.ndarray, bool, list[tv.Deteccion], list[str]]:
     """Recorta al recuadro que vio el usuario, detecta y, si no hay nada, reintenta entero.
 
@@ -340,10 +341,10 @@ def detectar_con_recorte(
     se reintenta con la foto entera.
     """
     recorte, recortada, avisos = pipeline.recortar(img, crop)
-    detecciones, avs = detectar_fichas(recorte)
+    detecciones, avs = detectar_fichas(recorte, imgsz)
     avisos += avs
     if recortada and not detecciones:
-        detecciones, avs = detectar_fichas(img)
+        detecciones, avs = detectar_fichas(img, imgsz)
         if detecciones:
             recorte, recortada = img, False
             avisos.append("Las fichas quedaron fuera del recuadro: se analizó la foto completa.")
@@ -376,7 +377,15 @@ async def analyze(req: AnalyzeRequest):
         resultado, silueta, objetivo = pipeline.validacion_simulada(figure)
         confianza = 0.72 + random.random() * 0.2
     else:
-        recorte, recortada, detecciones, avisos = detectar_con_recorte(img, req.crop)
+        # Si a la resolución de siempre a la silueta le falta un pedazo, se
+        # repite a otras antes de calificar: el detector pierde fichas en fotos
+        # concretas (el triángulo verde del pato a 640 px) y el estudiante que
+        # armó bien no tiene por qué pagarlo. Una foto que ya sale entera no se
+        # vuelve a analizar. Medido con el banco de `pruebas_robustez`.
+        _, (recorte, recortada, detecciones, avisos), _ = pipeline.con_reintento(
+            lambda t: detectar_con_recorte(img, req.crop, t), TAMANOS_REINTENTO,
+            fichas=lambda r: r[2],
+        )
 
         confianza = (sum(d.confianza for d in detecciones) / len(detecciones)
                      if detecciones else 0.0)
@@ -421,10 +430,21 @@ class SilhouetteResponse(BaseModel):
     silhouette:    list[list[float]] = []
     pieces_used:   int
     coverage:      float
+    # Cuánto mide la silueta en triángulos pequeños; un Tangram completo, 16.
+    # Es lo que decide `detection_ok` (ver `pipeline.UNIDADES_COMPLETA`).
+    units:         float = 0.0
+    # Resolución a la que salió la silueta: YOLO_IMGSZ, u otra si en esa faltaba figura.
+    imgsz:         int = 0
     detection_ok:  bool
     pieces:        dict
     warnings:      list[str] = []
     processing_ms: int
+
+
+#: Resoluciones que se prueban, en orden, si en la primera falta figura (ver
+#: `pipeline.con_reintento`). La primera es la de siempre; el resto van
+#: ordenadas por el IoU medio de su silueta en las 112 fotos reales.
+TAMANOS_REINTENTO = tuple(dict.fromkeys((YOLO_IMGSZ, 800, 1024, 512)))
 
 
 def _a_referencia(poly: np.ndarray) -> list[list[float]]:
@@ -451,6 +471,10 @@ async def silhouette(req: SilhouetteRequest):
     detectan las fichas, se unen sus máscaras y se devuelve el contorno. Lo usa
     el panel del docente para añadir figuras al catálogo sin editar JSON a mano.
 
+    Si a la resolución de siempre la silueta no mide lo que un Tangram completo,
+    se repite a otras (`TAMANOS_REINTENTO`) y se queda la primera que sí, igual
+    que al calificar un intento.
+
     Aquí no hay modo demostración: sin detector no hay contorno que fingir, y
     devolver uno inventado sería sembrar en el catálogo una figura que nadie
     armó. Se responde 503 y se dice por qué.
@@ -466,7 +490,12 @@ async def silhouette(req: SilhouetteRequest):
     if img is None:
         raise HTTPException(status_code=422, detail="Imagen inválida")
 
-    _, _, detecciones, avisos = detectar_con_recorte(img, req.crop)
+    tam, (_, _, detecciones, avisos), completa = pipeline.con_reintento(
+        lambda t: detectar_con_recorte(img, req.crop, t), TAMANOS_REINTENTO,
+        fichas=lambda r: r[2],
+    )
+    contorno, unidades = pipeline.medir_silueta(detecciones)
+    avisos = list(avisos)
 
     if not detecciones:
         vacio = tv.ResultadoInventario(
@@ -474,25 +503,32 @@ async def silhouette(req: SilhouetteRequest):
             faltantes=dict(tv.INVENTARIO_CANONICO), sobrantes={}, total_detectadas=0,
         )
         return SilhouetteResponse(
-            silhouette=[], pieces_used=0, coverage=0.0, detection_ok=False,
+            silhouette=[], pieces_used=0, coverage=0.0, imgsz=tam, detection_ok=False,
             pieces=pipeline._inventario_para_app(vacio),
             warnings=avisos + ["No se detectó ninguna ficha en la foto."],
             processing_ms=int((time.time() - t0) * 1000),
         )
 
     inventario = tv.validar_inventario(detecciones)
-    cobertura = tv.cobertura_detectada(detecciones)
-    contorno: list[list[float]] = []
-    try:
-        contorno = _a_referencia(tv.simplificar(tv.silueta_union(detecciones)))
-    except (ValueError, cv2.error) as exc:
-        avisos.append(f"No se pudo formar la silueta: {exc}")
+    salida: list[list[float]] = []
+    if contorno is None:
+        avisos.append("No se pudo formar la silueta con las fichas detectadas.")
+    else:
+        salida = _a_referencia(tv.simplificar(contorno))
+    if completa and tam != TAMANOS_REINTENTO[0]:
+        avisos.append("En el primer análisis faltaba parte de la figura; "
+                      "se repitió a otra resolución y ahí salió entera.")
+    if completa and not inventario.completo:
+        avisos.append("El detector confundió el tipo de alguna ficha, pero la silueta "
+                      "mide lo que un Tangram completo. Compárala con la foto antes de guardar.")
 
     return SilhouetteResponse(
-        silhouette=contorno,
+        silhouette=salida,
         pieces_used=inventario.total_detectadas,
-        coverage=round(float(cobertura), 3),
-        detection_ok=cobertura >= tv.UMBRAL_COBERTURA and bool(contorno),
+        coverage=round(float(tv.cobertura_detectada(detecciones)), 3),
+        units=round(float(unidades), 2),
+        imgsz=tam,
+        detection_ok=completa,
         pieces=pipeline._inventario_para_app(inventario),
         warnings=avisos,
         processing_ms=int((time.time() - t0) * 1000),

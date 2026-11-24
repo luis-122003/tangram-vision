@@ -696,9 +696,17 @@ nada: el detector reconoce **fichas**, no figuras, y lo que distingue una figura
 de otra es su polígono de referencia. `POST /figures/silhouette` corre el mismo
 detector sobre la foto, une las máscaras de las fichas y devuelve ese polígono
 normalizado; la web lo dibuja como **silueta sintética** —la misma imagen que
-verá el estudiante en el catálogo— y solo deja guardar si la cámara vio las 7
-fichas (una referencia sacada de seis es una figura contra la que nadie podrá
-acertar). Al guardar, `POST /figures` la inserta activa en la tabla `figures` y
+verá el estudiante en el catálogo— y solo deja guardar si la silueta mide lo
+que un Tangram completo: entre 15 y 17,5 triángulos pequeños, cuando el
+completo mide 16 (una referencia a la que le falta una ficha grande es una
+figura contra la que nadie podrá acertar). Se mide por área y no contando
+fichas por clase porque el detector confunde clases —al romboide lo llama
+«triángulo mediano»— mucho más de lo que pierde fichas. Si a la resolución de
+siempre falta figura, el servicio repite a 800, 1024 y 512 px y se queda la
+primera que salga entera; en las 112 fotos reales eso pasó en 1. La
+calificación de un intento (`/analyze`) hace lo mismo antes de comparar con la
+figura objetivo (`pipeline.con_reintento`): una foto que ya sale entera no se
+vuelve a analizar, así que lo que hoy funciona no cambia ni se demora. Al guardar, `POST /figures` la inserta activa en la tabla `figures` y
 aparece de inmediato en la app y en la web. Las figuras del panel viven solo en
 MySQL: `figures_seed.json` es la siembra de una instalación nueva y no se toca.
 No hay `DELETE`: los intentos guardados apuntan al slug, así que una figura se

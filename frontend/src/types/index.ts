@@ -109,14 +109,23 @@ export interface Figure {
  * de la foto de una figura armada, y qué alcanzó a ver para sacarla.
  *
  * `silhouette` llega en el mismo formato que `Figure.silhouette`, así que se
- * puede dibujar con el mismo componente y guardar tal cual. `pieces.complete`
- * es la condición para guardar: una referencia sacada de seis fichas es una
- * figura contra la que ningún niño podrá acertar.
+ * puede dibujar con el mismo componente y guardar tal cual. `detection_ok` es
+ * la condición para guardar: la silueta mide lo que un Tangram completo
+ * (`units` cerca de 16). Una referencia a la que le falta una ficha grande es
+ * una figura contra la que ningún niño podrá acertar.
+ *
+ * `pieces` es lo que el detector cree que vio, por clases. Es informativo: el
+ * detector confunde clases (el romboide por un triángulo mediano) mucho más de
+ * lo que pierde fichas, y por eso ya no decide.
  */
 export interface SilhouetteResult {
   silhouette:    [number, number][];
   pieces_used:   number;
   coverage:      number;
+  /** Área de la silueta en triángulos pequeños. Un Tangram completo mide 16. */
+  units:         number;
+  /** Resolución a la que salió la silueta (la de siempre u otra de reintento). */
+  imgsz:         number;
   detection_ok:  boolean;
   pieces: {
     detected: Record<string, number>;

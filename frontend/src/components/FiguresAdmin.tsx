@@ -18,9 +18,13 @@ import { useEstrecho, useTelefono } from "../hooks/useMedia";
  * figura que se guarda es exactamente la calidad de la foto que se sube;
  * luego la foto; luego la **silueta sintética** que salió de ella, que es la
  * imagen que verá el estudiante en el catálogo y que hay que mirar antes de
- * guardar; y solo al final el botón. Guardar se bloquea si la cámara no vio
- * las siete fichas: una referencia sacada de seis es una figura contra la que
- * ningún niño podrá acertar.
+ * guardar; y solo al final el botón. Guardar se bloquea si la silueta no mide
+ * lo que un Tangram completo: una referencia a la que le falta una ficha es una
+ * figura contra la que ningún niño podrá acertar.
+ *
+ * Se mide por área y no contando fichas por clase porque el detector confunde
+ * las clases (al romboide lo llama «triángulo mediano») mucho más de lo que
+ * pierde fichas. Con el conteo, una foto perfecta del pato no se dejaba guardar.
  */
 
 const CATEGORIAS: Category[]  = ["Objetos", "Animales", "Personas"];
@@ -33,7 +37,7 @@ const PASOS = [
   ["Arma la figura con las 7 fichas", "Todas sobre la mesa, sin que sobre ni falte ninguna, y sin montar una encima de otra."],
   ["Fondo liso y buena luz", "Una hoja blanca o la mesa despejada. Luz pareja, sin sombras fuertes ni manos en la foto."],
   ["Foto desde arriba, completa", "La figura entera dentro del cuadro y en la orientación en que quieres que se vea en el catálogo."],
-  ["Sube la foto y revisa la silueta", "Debe verse la figura limpia y «7 de 7 fichas». Si falta una o sobra fondo, repite la foto."],
+  ["Sube la foto y revisa la silueta", "Compárala con la foto: debe verse la figura entera y limpia. Si le falta un pedazo o sobra fondo, repite la foto."],
   ["Ponle nombre y guarda", "Aparece de inmediato en la app de los estudiantes. Pruébala armándola y tomándole una foto."],
 ];
 
@@ -132,17 +136,21 @@ export default function FiguresAdmin({ onChanged }: {
     }
   }
 
-  const fichasVistas = resultado?.pieces_used ?? 0;
-  const siluetaSirve = !!resultado && !!silueta && resultado.detection_ok && resultado.pieces.complete;
+  /** Qué porcentaje de un Tangram completo (16 triángulos pequeños) mide la silueta. */
+  const porcentaje = Math.round(((resultado?.units ?? 0) / 16) * 100);
+  const siluetaSirve = !!resultado && !!silueta && resultado.detection_ok;
   const puedeGuardar = nombre.trim().length >= 2 && siluetaSirve && !guardando;
 
   /** Por qué no se puede guardar todavía, en una frase que diga qué hacer. */
   function motivoBloqueo(): string | null {
     if (!resultado) return null;
     if (!silueta) return "No se pudo formar la silueta con esta foto. Repítela con más luz y la figura completa.";
-    if (!resultado.detection_ok) return `La cámara vio muy poco de la figura (${fichasVistas} de 7 fichas). Repite la foto: fondo liso, sin manos, figura completa.`;
-    if (Object.keys(resultado.pieces.extra).length > 0) return `Hay fichas de más en la foto (${fichasVistas} vistas). Deja sobre la mesa solo las 7 del Tangram y repite.`;
-    if (!resultado.pieces.complete) return `Faltan fichas por ver (${fichasVistas} de 7). Una referencia incompleta no sirve: repite la foto.`;
+    if (!resultado.detection_ok && resultado.units > 16) {
+      return `La silueta mide más que un Tangram (${porcentaje} %): hay algo pegado a la figura o una ficha de más. Deja solo las 7 y repite la foto.`;
+    }
+    if (!resultado.detection_ok) {
+      return `A la silueta le falta figura: mide el ${porcentaje} % de un Tangram. La cámara no vio alguna ficha. Repite la foto: fondo liso, buena luz, sin manos.`;
+    }
     if (nombre.trim().length < 2) return "Ponle un nombre a la figura.";
     return null;
   }
@@ -333,8 +341,8 @@ export default function FiguresAdmin({ onChanged }: {
             )}
             {resultado && (
               <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BRUT.ink, textAlign: "center" }}>
-                La cámara vio {fichasVistas} de 7 fichas
-                {resultado.pieces.complete ? " · completa" : ""}
+                La silueta mide el {porcentaje} % de un Tangram
+                {resultado.detection_ok ? " · completa" : ""}
                 {resultado.warnings.length > 0 && (
                   <span style={{ display: "block", fontWeight: 500, color: BRUT.muted, marginTop: 4 }}>
                     {resultado.warnings.join(" ")}
@@ -354,7 +362,7 @@ export default function FiguresAdmin({ onChanged }: {
                       color: bloqueo ? BRUT.ink : BRUT.muted }}>
             {bloqueo ?? (resultado
               ? "Todo en orden: la silueta está completa."
-              : "Se habilita cuando la foto dé una silueta con las 7 fichas.")}
+              : "Se habilita cuando la foto dé una silueta completa.")}
           </p>
         </div>
       </form>

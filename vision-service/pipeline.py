@@ -156,6 +156,82 @@ def descartar_duplicados(detecciones: list[tv.Deteccion], umbral: float = 0.6) -
     return conservadas
 
 
+# ─── ¿Está entera la silueta? ───────────────────────────────────────────────────
+#: Entre cuántas unidades (triángulos pequeños) debe medir la silueta para darla
+#: por entera. Un Tangram mide 16.
+#:
+#: Por qué el área y no el inventario por clases: el detector confunde las
+#: clases mucho más de lo que pierde fichas. En la foto del pato que motivó
+#: esto vio el romboide como «triángulo mediano» y el mediano como «grande»;
+#: el inventario por etiquetas no cuadraba nunca, aunque la silueta estuviera
+#: entera. El área no se deja engañar por la etiqueta.
+#:
+#: La unidad se saca de la ficha más grande, que en un Tangram completo es un
+#: triángulo grande (4 unidades): es la clase que el detector ve con más
+#: seguridad. Medido el 23 de noviembre de 2026 sobre las 112 fotos reales de
+#: `figuras_armadas_unet` a 640 px, quitando cada ficha por turnos:
+#:
+#:     silueta completa          14.97 – 17.27   (mediana 16.5)
+#:     sin un triángulo grande   11.02 – 13.64   -> 0 % llega a 15
+#:     sin una ficha de 2        12.93 – 15.00   -> 0 % llega a 15
+#:     sin un triángulo pequeño  13.95 – 16.17   -> 89 % llega a 15
+#:
+#: Que pase una silueta sin un triángulo pequeño es asumible: le falta 1/16
+#: del área. La que no debe pasar —la de la foto que se comió una ficha
+#: grande— no pasa. El techo detiene las fotos con algo pegado a la figura.
+UNIDADES_COMPLETA = (15.0, 17.5)
+
+
+def medir_silueta(detecciones: list[tv.Deteccion]) -> tuple[np.ndarray | None, float]:
+    """Contorno de la unión (en píxeles) y cuántas unidades mide.
+
+    Se mide sobre el contorno de la silueta, no sobre la suma de las máscaras:
+    una ficha suelta lejos de la figura no entra en la silueta y tampoco debe
+    contar en su área.
+    """
+    if not detecciones:
+        return None, 0.0
+    try:
+        contorno = tv.silueta_union(detecciones)
+    except (ValueError, cv2.error):
+        return None, 0.0
+    unidad = max(d.area for d in detecciones) / tv.AREA_RELATIVA[tv.TRIANGULO_GRANDE]
+    if unidad <= 0:
+        return None, 0.0
+    area = abs(float(cv2.contourArea(contorno.astype(np.float32))))
+    return contorno, area / unidad
+
+
+def silueta_completa(contorno: np.ndarray | None, unidades: float) -> bool:
+    minimo, maximo = UNIDADES_COMPLETA
+    return contorno is not None and minimo <= unidades <= maximo
+
+
+def con_reintento(detectar, tamanos, fichas=lambda r: r):
+    """Detecta a la primera resolución y, si falta figura, prueba las siguientes.
+
+    `detectar(tam)` corre el detector a esa resolución y devuelve lo que quiera
+    quien llama; `fichas(resultado)` saca de ahí la lista de detecciones.
+    Devuelve `(tam, resultado, completa)`: el primer intento cuya silueta mide lo
+    que un Tangram entero o, si ninguno, **el primero** —lo mismo que se habría
+    obtenido sin reintentar—.
+
+    Por qué hace falta: ninguna resolución es mejor que 640 en general (IoU
+    medio de la silueta en las 112 fotos: 640 0.968, 800 0.967, 1024 0.960,
+    512 0.954), pero fallan en fotos distintas. En la del pato, a 640 se pierde
+    el triángulo grande verde y a 800 aparece. Una foto que ya sale entera no
+    se vuelve a analizar, así que lo que hoy funciona no cambia ni se demora.
+    """
+    primero = None
+    for tam in tamanos:
+        resultado = detectar(tam)
+        if primero is None:
+            primero = (tam, resultado)
+        if silueta_completa(*medir_silueta(fichas(resultado))):
+            return tam, resultado, True
+    return primero[0], primero[1], False
+
+
 # ─── Encuadre de la foto ────────────────────────────────────────────────────────
 #: Fracción del recuadro que debe ocupar la figura para que las fichas se vean.
 #: Por debajo de esto el detector trabaja con fichas de pocos píxeles y empieza a
