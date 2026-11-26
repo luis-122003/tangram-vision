@@ -32,7 +32,8 @@ const FORMA: Record<keyof typeof FICHA, string> = {
   large_tri:     "3,43 43,43 43,3",
   medium_tri:    "9,37 37,37 37,9",
   small_tri:     "13,33 33,33 33,13",
-  square:        "23,9 37,23 23,37 9,23",
+  // Sin girar (de canto parecía un rombo); lado = cateto del triángulo pequeño.
+  square:        "13,13 33,13 33,33 13,33",
   parallelogram: "4,30 18,16 42,16 28,30",
 };
 
