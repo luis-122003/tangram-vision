@@ -22,8 +22,7 @@ import type { Figure, SessionRow } from "../types";
  * verde o rojo solo en el resultado.
  */
 export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
-  // Cuatro cifras en 360 px son columnas de ochenta píxeles: el número cabe,
-  // su etiqueta no. En teléfono se apilan de dos en dos.
+  // En teléfono las cifras van de dos en dos: más juntas, la etiqueta no cabe.
   const telefono = useTelefono();
   const [attempts, setAttempts] = useState<SessionRow[]>([]);
   const [loading,  setLoading]  = useState(true);
@@ -48,7 +47,6 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
 
   const total  = attempts.length;
   const passed = attempts.filter(a => a.match_result).length;
-  const avgIoU = total ? (attempts.reduce((s, a) => s + a.iou_score, 0) / total).toFixed(2) : "—";
 
   const aviso = {
     padding: "2.5rem", textAlign: "center" as const, fontSize: 14,
@@ -78,8 +76,8 @@ export default function TeacherDashboard({ figures }: { figures: Figure[] }) {
         {[
           { label: "Intentos totales", value: totalCurso, tono: BRUT.card },
           { label: "Aprobados",        value: passed,     tono: BRUT.success },
-          { label: "Tasa de éxito",    value: total ? `${Math.round(passed / total * 100)}%` : "—", tono: BRUT.info },
-          { label: "IoU promedio",     value: avgIoU,     tono: BRUT.card },
+          // Sin «Tasa de éxito» ni «IoU promedio»: son cifras de evaluación
+          // del sistema, no del curso, y al docente no le dicen qué hacer.
         ].map(({ label, value, tono }) => (
           <div key={label} style={{ padding: "1.1rem 1.3rem", ...BRUT.raised(4, tono) }}>
             <p style={{ ...T.eyebrow(BRUT.ink), fontSize: 10, margin: "0 0 6px" }}>{label}</p>
